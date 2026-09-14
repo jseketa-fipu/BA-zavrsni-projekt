@@ -1,0 +1,844 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact registry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --paper: #e6e8e1;
+    --paper-deep: #d9ddd3;
+    --ink: #16262b;
+    --ink-soft: #55666a;
+    --rule: #a9b2aa;
+    --ok: #1f6b4c;
+    --stop: #a63a22;
+    --wait: #8a6a12;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem 4rem; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: .75rem;
+    align-items: baseline; justify-content: space-between;
+    padding: 1.25rem 0 1rem; border-bottom: 1px solid var(--rule);
+  }
+  .mark { font-weight: 600; letter-spacing: -.01em; }
+  .mark span { color: var(--ink-soft); font-weight: 400; }
+  .conn { display: flex; align-items: center; gap: .6rem; font-family: var(--mono); font-size: .78rem; }
+  .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--wait); display: inline-block; }
+  .dot.live { background: var(--ok); }
+
+  button {
+    font: inherit; font-size: .88rem; color: var(--ink);
+    background: transparent; border: 1px solid var(--ink);
+    border-radius: 2px; padding: .42rem .85rem; cursor: pointer;
+  }
+  button:hover { background: var(--paper-deep); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.solid { background: var(--ink); color: var(--paper); }
+  button.solid:hover { background: #0e1b1f; }
+  button.quiet { border-color: var(--rule); color: var(--ink-soft); }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  input[type="text"], select {
+    font-family: var(--mono); font-size: .85rem; padding: .42rem .6rem;
+    border: 1px solid var(--rule); border-radius: 2px;
+    background: #eef0ea; color: var(--ink); min-width: 0;
+  }
+  input[type="text"]:focus, select:focus { border-color: var(--ink); outline: none; }
+
+  .bench {
+    margin-top: 2.5rem; border: 1px dashed var(--rule); border-radius: 3px;
+    padding: 2.25rem 1.5rem; text-align: center; background: var(--paper-deep);
+  }
+  .bench.over { border-color: var(--ink); border-style: solid; }
+  .bench p { max-width: 34rem; margin: 0 auto; color: var(--ink-soft); }
+  .bench .lead { color: var(--ink); font-size: 1.05rem; margin-bottom: .35rem; }
+  .bench .pick { margin-top: 1.1rem; }
+
+  .digest {
+    font-family: var(--mono); font-weight: 500;
+    font-size: clamp(1.05rem, 5.2vw, 1.9rem); line-height: 1.35;
+    letter-spacing: .02em; word-break: break-all; margin: 0 0 .6rem;
+  }
+  .digest b { font-weight: 500; }
+  .digest .sp { color: var(--rule); }
+  .fileline { font-family: var(--mono); font-size: .78rem; color: var(--ink-soft); }
+
+  .verdict { margin-top: 1.75rem; border-top: 3px solid var(--ink); padding-top: 1rem; }
+  .verdict.ok { border-color: var(--ok); }
+  .verdict.stop { border-color: var(--stop); }
+  .verdict.wait { border-color: var(--wait); }
+  .verdict h2 { font-size: 1.35rem; margin: 0 0 .3rem; letter-spacing: -.015em; }
+  .verdict.ok h2 { color: var(--ok); }
+  .verdict.stop h2 { color: var(--stop); }
+  .verdict.wait h2 { color: var(--wait); }
+  .verdict p { margin: 0; color: var(--ink-soft); max-width: 44rem; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .9rem 1.5rem; margin-top: 1.1rem; }
+  .facts div { border-left: 1px solid var(--rule); padding-left: .7rem; }
+  .facts dt { font-size: .74rem; color: var(--ink-soft); margin-bottom: .15rem; }
+  .facts dd { margin: 0; font-family: var(--mono); font-size: .84rem; word-break: break-all; }
+
+  /* sign-off track */
+  .track { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: 1.4rem; }
+  .chip { border: 1px solid var(--rule); border-radius: 2px; padding: .55rem .65rem; background: #eef0ea; }
+  .chip.signed { border-color: var(--ok); background: rgba(31,107,76,.07); }
+  .chip.pending { border-color: var(--wait); border-style: dashed; background: rgba(138,106,18,.06); }
+  .chip .role { font-size: .8rem; font-weight: 500; }
+  .chip .who { font-family: var(--mono); font-size: .72rem; color: var(--ink-soft); word-break: break-all; }
+  .chip.signed .who { color: var(--ok); }
+  .chip.pending .who { color: var(--wait); }
+
+  .act { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: 1.25rem; }
+
+  .tray { margin-top: 1rem; border: 1px solid var(--rule); border-left: 3px solid var(--wait); border-radius: 2px; padding: .8rem .9rem; background: #eef0ea; }
+  .tray h3 { margin: 0 0 .35rem; font-size: .85rem; font-weight: 600; }
+  .tray ul { margin: 0 0 .7rem; padding-left: 1rem; }
+  .tray li { font-family: var(--mono); font-size: .76rem; color: var(--ink-soft); word-break: break-all; }
+
+  .ledger { margin-top: 3rem; }
+  .ledger h2 { font-size: .95rem; font-weight: 600; margin: 0 0 .5rem; }
+  .ledger .count { color: var(--ink-soft); font-weight: 400; }
+  table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  th { text-align: left; font-weight: 500; color: var(--ink-soft); font-size: .76rem; padding: .5rem .6rem .5rem 0; border-bottom: 1px solid var(--rule); }
+  td { padding: .6rem .6rem .6rem 0; border-bottom: 1px solid rgba(169,178,170,.45); vertical-align: top; font-family: var(--mono); }
+  td.state { font-family: var(--sans); }
+  td.state.ok { color: var(--ok); }
+  td.state.stop { color: var(--stop); }
+  td.state.wait { color: var(--wait); }
+  tr.empty td { color: var(--ink-soft); font-family: var(--sans); border-bottom: none; padding-top: 1rem; }
+  .hide-narrow { display: table-cell; }
+
+  .note { margin-top: 2.5rem; font-size: .82rem; color: var(--ink-soft); max-width: 42rem; border-top: 1px solid var(--rule); padding-top: 1rem; }
+  .note code { font-family: var(--mono); font-size: .95em; }
+  .err { color: var(--stop); font-size: .84rem; margin-top: .7rem; }
+
+  @media (max-width: 560px) {
+    .hide-narrow { display: none; }
+    .bench { padding: 1.75rem 1rem; }
+    .track { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .verdict { animation: rise .22s ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <div class="mark">Artifact registry <span>&mdash; firmware sign-off on chain</span></div>
+    <div class="conn">
+      <span class="dot" id="dot"></span>
+      <span id="connLabel">Local demo, no wallet</span>
+      <button class="quiet" id="connectBtn">Connect wallet</button>
+    </div>
+  </div>
+
+  <section class="bench" id="bench">
+    <p class="lead">Drop a build here to check whether it was cleared for release.</p>
+    <p>The file never leaves this machine. Only its SHA-256 digest is looked up, and only the digest is ever written to the chain.</p>
+    <div class="pick"><button id="pickBtn">Choose a file</button></div>
+    <input type="file" id="file" hidden>
+  </section>
+
+  <section id="result" hidden>
+    <div style="margin-top:2rem">
+      <div class="digest" id="digest"></div>
+      <div class="fileline" id="fileline"></div>
+    </div>
+
+    <div class="verdict" id="verdict">
+      <h2 id="verdictTitle"></h2>
+      <p id="verdictBody"></p>
+      <dl class="facts" id="facts"></dl>
+      <div class="track" id="track" hidden></div>
+      <div class="act" id="actions"></div>
+      <div id="tray"></div>
+    </div>
+  </section>
+  <div class="err" id="err" hidden></div>
+
+  <section class="ledger">
+    <h2>Builds on record <span class="count" id="count"></span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Digest</th>
+          <th>Version</th>
+          <th class="hide-narrow">Publisher</th>
+          <th>Sign-offs</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <p class="note">
+    Reviewers sign a build off chain, so approving costs them nothing and needs no funded account.
+    The signatures collect here and go on chain together in one transaction, paid for by whoever
+    submits them. The digest is a plain SHA-256, reproducible offline with
+    <code>sha256sum firmware.bin</code>.
+  </p>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  /* =====================================================================
+     ArtifactRegistry - browser client
+
+     Three ideas are worth following through this file:
+
+     1. HASHING IS LOCAL. The file never leaves the machine. `crypto.subtle`
+        computes its SHA-256 in the browser and only those 32 bytes are ever
+        sent to the chain. Checking a 4 GB firmware image costs the network
+        nothing.
+
+     2. READING IS FREE, WRITING IS NOT. `verify` and `signedBy` are view
+        calls: no wallet, no gas, answered by the node from local state.
+        `register`, `revoke` and `attestBatch` are transactions: signed,
+        mined, paid for. Every `await tx.wait()` below marks that boundary.
+
+     3. SIGNING IS NOT SENDING. A reviewer signing off produces a signature
+        in memory and nothing else - no transaction, no gas, no funded
+        account. Signatures pile up in the tray until somebody relays them
+        together. That separation is the whole point of the design, so the
+        UI is built to make it visible.
+
+     Everything the chain does sits behind one small interface - `list`,
+     `lookup`, `register`, `revoke`, `sign`, `submit` - with two
+     implementations: `demoBackend` (in-memory, no chain) and `chainBackend`
+     (ethers + MetaMask). The rest of the file cannot tell them apart.
+     ===================================================================== */
+
+  // The ABI is how ethers learns to encode calls. Only what the UI actually
+  // uses is listed - a full ABI would work, this is just easier to read.
+  // Note `verify` returns a named tuple, so results come back as `rec.publisher`
+  // rather than `rec[0]`, and `Registered` is here because the ledger listing
+  // is built from its logs.
+  const ABI = [
+    "function register(bytes32 digest, string version)",
+    "function revoke(bytes32 digest, string reason)",
+    "function attestBatch((bytes32 digest,bytes32 role,address signer,uint256 deadline)[] list, bytes[] signatures)",
+    "function verify(bytes32 digest) view returns ((address publisher,uint64 registeredAt,bool revoked,uint8 signOffs,string version) record, bool released)",
+    "function signedBy(bytes32, bytes32) view returns (address)",
+    "function holdsRole(address, bytes32) view returns (bool)",
+    "function quorum() view returns (uint8)",
+    "event Registered(bytes32 indexed digest, address indexed publisher, string version)",
+    "event Revoked(bytes32 indexed digest, address indexed publisher, string reason)",
+
+    // The custom errors MUST be declared here too. A revert arrives as four
+    // raw bytes - `0x3a81d6fc` and nothing else - and ethers can only turn
+    // that back into a name if it holds the matching fragment. Leave these
+    // out and every failure reads "execution reverted (unknown custom
+    // error)", which is the same wall of nothing a require string was
+    // supposed to save you from. This is the cost of custom errors, and it
+    // is paid here, once.
+    "error NotOwner()",
+    "error NotPublisher()",
+    "error AlreadyRegistered()",
+    "error UnknownDigest()",
+    "error NotTheOriginalPublisher()",
+    "error AlreadyRevoked()",
+    "error ArtifactRevoked()",
+    "error RoleNotHeld()",
+    "error RoleAlreadySigned()",
+    "error SignatureExpired()",
+    "error BadSignature()",
+    "error MalleableSignature()",
+    "error LengthMismatch()",
+    "error QuorumOutOfRange()"
+  ];
+
+  const ROLES = [
+    { key: "BUILD", label: "Build server" },
+    { key: "QA", label: "QA" },
+    { key: "SECURITY", label: "Security review" }
+  ];
+
+  // "Who am I and what may I do" lives on the backend object; the page keeps
+  // only what the backend cannot know.
+  const state = {
+    backend: null,  // demoBackend() or chainBackend(): owns account, quorum, myRoles
+    digest: null,   // SHA-256 of the file on the bench
+    record: null,   // what the registry knows about it, or null
+    pending: [],    // signatures for the file on the bench, not yet relayed
+    ledger: []
+  };
+
+  // ---- helpers -----------------------------------------------------------
+
+  const $ = (id) => document.getElementById(id);
+  const shortAddr = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+  const shortDigest = (d) => d.slice(0, 12) + "…" + d.slice(-6);
+  const when = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+  const roleLabel = (k) => (ROLES.find((r) => r.key === k) || {}).label || k;
+  const countSignOffs = (rec) => ROLES.filter((r) => rec.signOffs[r.key]).length;
+  const isReleased = (rec) => !rec.revoked && countSignOffs(rec) >= state.backend.quorum;
+
+  // Anything that reaches innerHTML goes through here first. Version strings
+  // and revocation reasons are written by other people - on a public chain,
+  // by strangers - so they are untrusted input in the XSS sense even though
+  // they arrived over a blockchain.
+  const esc = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const bytes = (n) =>
+    n < 1024 ? n + " B"
+    : n < 1048576 ? (n / 1024).toFixed(1) + " kB"
+    : (n / 1048576).toFixed(2) + " MB";
+
+  /// The one piece of real cryptography the browser does. SubtleCrypto is
+  /// built in, so no library is needed and an examiner can reproduce the
+  /// answer with `sha256sum` on the same file.
+  async function sha256(file) {
+    const out = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return "0x" + [...new Uint8Array(out)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  // Roles are keccak256 of their name on chain, so the frontend has to hash
+  // them the same way. Loaded lazily because ethers arrives with the wallet.
+  const roleHash = (key) => window.ethers.keccak256(window.ethers.toUtf8Bytes(key));
+
+  // =====================================================================
+  //   BACKEND 1: demo. No chain, no wallet - the projector fallback.
+  // =====================================================================
+
+  function demoBackend() {
+    const me = "0x9f2c4A1b7D0e35F8b6C1a02D4e8B37aC5106fE21";
+    const who = {
+      BUILD: "0x3A7f10Bc94D2e5810Ca6b7F03e5D2c8149Ab6E30",
+      QA: "0x88b1cE04a7F26D391b0e5c7a4D82F61035Ac9d17",
+      SECURITY: "0xC4d0F52e1b9A63870d2c5E48a1F70b39cE85d206"
+    };
+    const day = 86400;
+    const now = Math.floor(Date.now() / 1000);
+
+    // Seeded so all three states are visible before anyone touches anything:
+    // released, awaiting sign-off, revoked.
+    const ledger = [
+      {
+        digest: "0x4f1a9c73b2e05d8618af7c40b93e2d5169aa3c8814e0f26b5d7ac91302e8bf47",
+        version: "gateway 2.4.0", publisher: me, registeredAt: now - 12 * day, revoked: false,
+        signOffs: { BUILD: who.BUILD, QA: who.QA, SECURITY: who.SECURITY }
+      },
+      {
+        digest: "0x2c8e05fa71d349b0e6f18c25a7043bd91e5fc6807a2d31be49c07f5a86d1042b",
+        version: "gateway 2.5.0-rc1", publisher: me, registeredAt: now - 2 * day, revoked: false,
+        signOffs: { BUILD: who.BUILD, QA: null, SECURITY: null }
+      },
+      {
+        digest: "0xb70c25e9143da8f6027bc3518e9fd402a6135c7ee8b04913da27f6c8501ea3db",
+        version: "gateway 2.3.7", publisher: me, registeredAt: now - 41 * day, revoked: true,
+        reason: "bootloader watchdog fault",
+        signOffs: { BUILD: who.BUILD, QA: who.QA, SECURITY: who.SECURITY }
+      }
+    ];
+
+    return {
+      account: me,
+      quorum: 3,
+      myRoles: new Set(ROLES.map((r) => r.key)), // in demo you may sign as anyone
+      list: async () => ledger,
+      lookup: async (digest) => ledger.find((a) => a.digest === digest) || null,
+      register: async (digest, version) => {
+        const rec = {
+          digest, version, publisher: me, registeredAt: Math.floor(Date.now() / 1000),
+          revoked: false, signOffs: { BUILD: null, QA: null, SECURITY: null }
+        };
+        ledger.push(rec);
+        return rec;
+      },
+      revoke: async (digest, reason) => {
+        const rec = ledger.find((a) => a.digest === digest);
+        Object.assign(rec, { revoked: true, reason });
+      },
+      // A believable-looking 65 bytes. It is not a real signature and would be
+      // rejected on chain in an instant - which is exactly the difference
+      // between this backend and the next one.
+      sign: async (digest, role) => ({
+        role, signer: who[role], deadline: Math.floor(Date.now() / 1000) + 7 * day,
+        signature: "0x" + [...crypto.getRandomValues(new Uint8Array(65))]
+          .map((b) => b.toString(16).padStart(2, "0")).join("")
+      }),
+      submit: async (queued) => {
+        const rec = ledger.find((a) => a.digest === queued[0].digest);
+        queued.forEach((p) => { rec.signOffs[p.role] = p.signer; });
+      }
+    };
+  }
+
+  // =====================================================================
+  //   BACKEND 2: the real chain, over ethers + MetaMask.
+  // =====================================================================
+
+  async function chainBackend(contract, account) {
+    const ZERO = window.ethers.ZeroAddress;
+
+    /// One view call for the record, three more for the sign-offs. All free,
+    /// all answered from the node's local state - no transaction is involved
+    /// and the wallet never opens.
+    async function lookup(digest) {
+      const { record } = await contract.verify(digest);
+      if (record.publisher === ZERO) return null; // never registered
+
+      // Fired off together rather than awaited one at a time: four sequential
+      // round trips to the node become one.
+      const signers = await Promise.all(
+        ROLES.map((r) => contract.signedBy(digest, roleHash(r.key)))
+      );
+      const signOffs = {};
+      ROLES.forEach((r, i) => { signOffs[r.key] = signers[i] === ZERO ? null : signers[i]; });
+
+      const rec = {
+        digest,
+        publisher: record.publisher,
+        registeredAt: Number(record.registeredAt), // uint64 arrives as BigInt
+        revoked: record.revoked,
+        version: record.version,
+        signOffs
+      };
+
+      // The reason for a revocation is only ever in the event log - storing it
+      // would have cost the publisher 20,000 gas per word to hold a string no
+      // contract will ever read.
+      if (rec.revoked) {
+        const logs = await contract.queryFilter(contract.filters.Revoked(digest));
+        if (logs.length) rec.reason = logs[logs.length - 1].args.reason;
+      }
+      return rec;
+    }
+
+    /// The contract keeps no list of digests, so the ledger is reconstructed
+    /// from `Registered` logs. This is the normal division of labour on chain:
+    /// storage for what contracts must read, events for what humans must read.
+    ///
+    /// Careful on public networks - many RPC providers cap how many blocks one
+    /// `eth_getLogs` may span, so a real deployment would page over ranges or
+    /// let an indexer do it. Against a local Anvil the whole chain is fine.
+    async function list() {
+      const logs = await contract.queryFilter(contract.filters.Registered());
+      const digests = [...new Set(logs.map((l) => l.args.digest))];
+      return (await Promise.all(digests.map(lookup))).filter(Boolean);
+    }
+
+    /// Every write goes through here. `tx.wait()` returns when the transaction
+    /// is in a block, not when it was sent - that is the moment a write is real.
+    ///
+    /// If it reverted, decode the custom error. ethers does this by itself on
+    /// the READ path (staticCall) using the contract's Interface, but a failing
+    /// WRITE is caught earlier, during gas estimation, by the provider - which
+    /// has no ABI - so `e.revert` arrives null and `e.data` holds the raw
+    /// 4-byte selector. `Interface.makeError` is the very call ethers makes on
+    /// the read path; doing it here means nothing else on the page needs to
+    /// know the two paths differ.
+    async function send(promise) {
+      try {
+        await (await promise).wait();
+      } catch (e) {
+        throw e.data ? contract.interface.makeError(e.data, e.transaction) : e;
+      }
+    }
+
+    return {
+      account,
+      quorum: Number(await contract.quorum()),
+      myRoles: new Set(
+        (await Promise.all(
+          ROLES.map(async (r) => (await contract.holdsRole(account, roleHash(r.key))) && r.key)
+        )).filter(Boolean)
+      ),
+      list,
+      lookup,
+      register: async (digest, version) => {
+        await send(contract.register(digest, version));
+        return lookup(digest);
+      },
+      revoke: (digest, reason) => send(contract.revoke(digest, reason)),
+
+      /// EIP-712: sign structured data, not a hex blob.
+      ///
+      /// The wallet shows the reviewer the actual fields - which digest, which
+      /// role - so they can see what they are approving. `domain` must match
+      /// `_buildDomainSeparator` in the contract exactly, and `types` must
+      /// match ATTESTATION_TYPEHASH exactly; one renamed field and the
+      /// recovered address comes out wrong.
+      ///
+      /// This costs nothing. No transaction is created. The reviewer's account
+      /// can be empty, cold, or on a hardware wallet.
+      sign: async (digest, role) => {
+        const net = await contract.runner.provider.getNetwork();
+        const domain = {
+          name: "ArtifactRegistry",
+          version: "1",
+          chainId: Number(net.chainId),          // dead on any other chain
+          verifyingContract: await contract.getAddress() // dead on any other deployment
+        };
+        const types = {
+          Attestation: [
+            { name: "digest", type: "bytes32" },
+            { name: "role", type: "bytes32" },
+            { name: "signer", type: "address" },
+            { name: "deadline", type: "uint256" }
+          ]
+        };
+        const deadline = Math.floor(Date.now() / 1000) + 7 * 86400;
+        const value = { digest, role: roleHash(role), signer: account, deadline };
+        return {
+          role, signer: account, deadline,
+          signature: await contract.runner.signTypedData(domain, types, value)
+        };
+      },
+
+      /// The only transaction in the sign-off flow, and whoever sends it pays
+      /// for all of the signatures inside it.
+      submit: (queued) => send(contract.attestBatch(
+        queued.map((p) => [p.digest, roleHash(p.role), p.signer, p.deadline]),
+        queued.map((p) => p.signature)))
+    };
+  }
+
+  // =====================================================================
+  //                              RENDERING
+  // =====================================================================
+
+  function renderLedger() {
+    const rows = $("rows");
+    $("count").textContent = state.ledger.length ? "(" + state.ledger.length + ")" : "";
+    if (!state.ledger.length) {
+      rows.innerHTML =
+        '<tr class="empty"><td colspan="5">Nothing on record yet. Drop a build above and register it.</td></tr>';
+      return;
+    }
+    rows.innerHTML = state.ledger
+      .slice()
+      .sort((a, b) => b.registeredAt - a.registeredAt)
+      .map((a) => {
+        const [cls, label] = a.revoked ? ["stop", "Revoked"]
+          : isReleased(a) ? ["ok", "Released"]
+          : ["wait", "Awaiting sign-off"];
+        return "<tr><td>" + shortDigest(a.digest) + "</td>" +
+          "<td>" + esc(a.version) + "</td>" +
+          '<td class="hide-narrow">' + shortAddr(a.publisher) + "</td>" +
+          "<td>" + countSignOffs(a) + " of " + state.backend.quorum + "</td>" +
+          '<td class="state ' + cls + '">' + label + "</td></tr>";
+      })
+      .join("");
+  }
+
+  function renderResult() {
+    const rec = state.record;
+    const v = $("verdict");
+    v.classList.remove("ok", "stop", "wait");
+    $("result").hidden = false;
+    $("err").hidden = true;
+    $("facts").innerHTML = "";
+    $("actions").innerHTML = "";
+    $("track").hidden = true;
+
+    // Not on record. The only thing on offer is registering it.
+    if (!rec) {
+      $("verdictTitle").textContent = "Not in the registry";
+      $("verdictBody").textContent =
+        "No publisher has claimed this exact build. Either it was never registered, or the bytes differ from what was published.";
+      $("actions").innerHTML =
+        '<input type="text" id="version" placeholder="version, e.g. 2.5.0" size="18">' +
+        '<button class="solid" id="registerBtn">Register this build</button>';
+      $("registerBtn").addEventListener("click", doRegister);
+      return renderTray();
+    }
+
+    const released = isReleased(rec);
+    const signed = countSignOffs(rec);
+    v.classList.add(rec.revoked ? "stop" : released ? "ok" : "wait");
+
+    $("verdictTitle").textContent = rec.revoked ? "Published, then withdrawn"
+      : released ? "Cleared for release"
+      : "Awaiting sign-off, " + signed + " of " + state.backend.quorum;
+
+    $("verdictBody").textContent = rec.revoked
+      ? "This build was published and signed off, but its publisher has since withdrawn it. Do not flash it."
+      : released
+      ? "Every required reviewer has signed this exact build. No single account could have produced that on its own."
+      : "This build is on record but has not collected enough independent sign-offs to count as released.";
+
+    const facts = [
+      ["Version", esc(rec.version)],
+      ["Publisher", shortAddr(rec.publisher)],
+      ["Registered", when(rec.registeredAt)]
+    ];
+    if (rec.revoked && rec.reason) facts.push(["Reason given", esc(rec.reason)]);
+    $("facts").innerHTML = facts
+      .map(([k, val]) => "<div><dt>" + k + "</dt><dd>" + val + "</dd></div>")
+      .join("");
+
+    // Three chips: signed on chain, signed but still in the tray, or nothing.
+    // The middle state is the one worth pointing at during a demo.
+    $("track").hidden = false;
+    $("track").innerHTML = ROLES.map((r) => {
+      const who = rec.signOffs[r.key];
+      const queued = state.pending.some((p) => p.role === r.key);
+      const cls = who ? "signed" : queued ? "pending" : "";
+      const line = who ? shortAddr(who) : queued ? "signed, not yet submitted" : "not signed";
+      return '<div class="chip ' + cls + '"><div class="role">' + r.label +
+        '</div><div class="who">' + line + "</div></div>";
+    }).join("");
+
+    // Roles this account may still sign: held, not yet on chain, not queued.
+    const open = ROLES.filter((r) =>
+      !rec.signOffs[r.key] &&
+      state.backend.myRoles.has(r.key) &&
+      !state.pending.some((p) => p.role === r.key));
+
+    if (!rec.revoked && open.length) {
+      $("actions").innerHTML =
+        '<select id="role">' +
+        open.map((r) => '<option value="' + r.key + '">' + r.label + "</option>").join("") +
+        '</select><button class="solid" id="signBtn">Sign off on this build</button>';
+      $("signBtn").addEventListener("click", doSign);
+    }
+    if (!rec.revoked && rec.publisher.toLowerCase() === state.backend.account.toLowerCase()) {
+      $("actions").insertAdjacentHTML("beforeend",
+        '<input type="text" id="reason" placeholder="reason for withdrawal" size="22">' +
+        '<button id="revokeBtn">Revoke this build</button>');
+      $("revokeBtn").addEventListener("click", doRevoke);
+    }
+    renderTray();
+  }
+
+  /// Signatures that exist but have not been relayed yet. Nothing here has
+  /// touched the chain, and closing the tab would lose all of it.
+  function renderTray() {
+    const queued = state.pending;
+    if (!queued.length) return void ($("tray").innerHTML = "");
+    $("tray").innerHTML =
+      '<div class="tray"><h3>' + queued.length + " signature" + (queued.length > 1 ? "s" : "") +
+      " ready to submit</h3><ul>" +
+      queued.map((p) => "<li>" + roleLabel(p.role) + " &middot; " + shortAddr(p.signer) +
+        " &middot; " + p.signature.slice(0, 22) + "…</li>").join("") +
+      '</ul><button class="solid" id="submitBtn">Submit to the chain</button></div>';
+    $("submitBtn").addEventListener("click", doSubmit);
+  }
+
+  function fail(msg) {
+    $("err").textContent = msg;
+    $("err").hidden = false;
+  }
+
+  /// Reverts reach here already decoded (see `send` in chainBackend), so the
+  /// custom error's name is on `e.revert.name` whichever path it came from.
+  const errorName = (e) => (e && e.revert && e.revert.name) || null;
+
+  /// Turn a thrown object into a sentence.
+  function explain(e) {
+    // BrowserProvider maps every wallet refusal - account request, transaction
+    // or typed-data signature - onto this one code.
+    if (e && e.code === "ACTION_REJECTED") return "Rejected in the wallet.";
+    const said = {
+      NotPublisher: "This account is not on the publisher allowlist.",
+      AlreadyRegistered: "That digest is already claimed. Records are never overwritten.",
+      NotTheOriginalPublisher: "Only the account that registered a build can withdraw it.",
+      RoleNotHeld: "This account does not hold that role.",
+      RoleAlreadySigned: "That role has already signed this build.",
+      SignatureExpired: "This signature is past its deadline. Sign again.",
+      ArtifactRevoked: "The build was withdrawn, so it can collect no more sign-offs.",
+      BadSignature: "The signature does not match the named signer.",
+      MalleableSignature: "The signature was reshaped in transit and was rejected.",
+      AlreadyRevoked: "That build has already been withdrawn.",
+      UnknownDigest: "That digest is not in the registry."
+    }[errorName(e)];
+    // A decoded name with no sentence of its own still beats ethers' generic
+    // "execution reverted (unknown custom error)".
+    return said || errorName(e) || (e && (e.shortMessage || e.message)) || "Something went wrong.";
+  }
+
+  // =====================================================================
+  //                               ACTIONS
+  // =====================================================================
+
+  /// Wraps a button for the length of an async action: disabled, relabelled
+  /// while a transaction is in flight, restored if it throws. Every write path
+  /// needs this, so it lives in one place.
+  async function run(btnId, busyLabel, fn) {
+    const btn = $(btnId);
+    const was = btn.textContent;
+    btn.disabled = true;
+    if (busyLabel) btn.textContent = busyLabel;
+    try {
+      await fn();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = was;
+      fail(explain(e));
+    }
+  }
+
+  async function handleFile(file) {
+    $("result").hidden = false;
+    $("fileline").textContent = "reading…";
+
+    state.digest = await sha256(file);
+    state.pending = []; // signatures belong to one file; a new file starts clean
+
+    // Painted in 8-character groups so it can be read aloud and compared
+    // against `sha256sum` output on screen.
+    const groups = state.digest.slice(2).match(/.{1,8}/g) || [];
+    $("digest").innerHTML = '<span class="sp">0x</span>' +
+      groups.map((g) => "<b>" + g + "</b>").join('<span class="sp">&nbsp;</span>');
+    $("fileline").textContent = file.name + " · " + bytes(file.size);
+
+    let readErr = null;
+    try {
+      state.record = await state.backend.lookup(state.digest);
+    } catch (e) {
+      state.record = null;
+      readErr = e;
+    }
+    renderResult(); // repaints for this file - and hides #err, so report after
+    if (readErr) {
+      $("verdictTitle").textContent = "Registry unreachable";
+      $("actions").innerHTML = ""; // do not offer to register what we could not look up
+      fail("Could not read the registry: " + explain(readErr));
+    }
+  }
+
+  function doRegister() {
+    const version = ($("version").value || "").trim();
+    if (!version) return fail("Give the build a version so people know what they are looking at.");
+    return run("registerBtn", "Waiting for confirmation…", async () => {
+      state.record = await state.backend.register(state.digest, version);
+      await refresh();
+    });
+  }
+
+  /// Signing does not touch the chain. The result goes into the tray.
+  function doSign() {
+    const role = $("role").value;
+    return run("signBtn", null, async () => {
+      const att = await state.backend.sign(state.digest, role);
+      state.pending.push({ digest: state.digest, ...att });
+      renderResult();
+    });
+  }
+
+  /// ...and this is where it finally does, for every queued signature at once.
+  function doSubmit() {
+    return run("submitBtn", "Waiting for confirmation…", async () => {
+      await state.backend.submit(state.pending);
+      state.pending = [];
+      state.record = await state.backend.lookup(state.digest);
+      await refresh();
+    });
+  }
+
+  function doRevoke() {
+    const why = ($("reason").value || "").trim() || "withdrawn by publisher";
+    return run("revokeBtn", "Waiting for confirmation…", async () => {
+      await state.backend.revoke(state.digest, why);
+      state.pending = []; // a withdrawn build can take no more sign-offs
+      state.record = await state.backend.lookup(state.digest);
+      await refresh();
+    });
+  }
+
+  /// Re-read everything the backend knows and repaint. Called after every
+  /// write, and once at startup - at which point there is no file on the bench
+  /// yet, so the result panel stays hidden.
+  async function refresh() {
+    state.ledger = await state.backend.list();
+    if (state.digest) renderResult();
+    renderLedger();
+  }
+
+  // =====================================================================
+  //                                WALLET
+  // =====================================================================
+
+  // Pulled from a CDN at runtime rather than bundled. If the room's network is
+  // hostile, save ethers.umd.min.js next to this file and point src at it.
+  function loadEthers() {
+    return new Promise((res, rej) => {
+      if (window.ethers) return res(window.ethers);
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js";
+      s.onload = () => res(window.ethers);
+      s.onerror = () => rej(new Error("could not load ethers"));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function connect() {
+    // MetaMask injects window.ethereum - but NOT into file:// pages unless the
+    // extension is explicitly allowed to. Serve this over http instead.
+    if (!window.ethereum) {
+      $("connLabel").textContent = "No wallet in this page, demo only";
+      $("connectBtn").disabled = true;
+      return;
+    }
+    await run("connectBtn", "Connecting…", async () => {
+      const ethers = await loadEthers();
+
+      // BrowserProvider wraps the wallet; getSigner() triggers the account
+      // prompt and returns the thing that can sign and send.
+      const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
+
+      const addr = prompt("Registry contract address on this chain:");
+      if (!addr) throw { shortMessage: "No address given, staying in demo." };
+
+      const contract = new ethers.Contract(addr.trim(), ABI, signer);
+      state.backend = await chainBackend(contract, await signer.getAddress());
+      state.pending = []; // demo signatures are fakes; never relay them
+
+      $("dot").classList.add("live");
+      $("connLabel").textContent = shortAddr(state.backend.account);
+      $("connectBtn").remove();
+
+      if (state.digest) state.record = await state.backend.lookup(state.digest);
+      await refresh();
+    });
+  }
+
+  // =====================================================================
+  //                                WIRING
+  // =====================================================================
+
+  const bench = $("bench");
+  $("pickBtn").addEventListener("click", () => $("file").click());
+  $("file").addEventListener("change", (e) => e.target.files[0] && handleFile(e.target.files[0]));
+  $("connectBtn").addEventListener("click", connect);
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    bench.addEventListener(ev, (e) => { e.preventDefault(); bench.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    bench.addEventListener(ev, (e) => { e.preventDefault(); bench.classList.remove("over"); }));
+  bench.addEventListener("drop", (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0]));
+
+  // Without these the browser navigates away to the dropped file.
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
+  // Start in demo mode; `connect` swaps the backend underneath.
+  state.backend = demoBackend();
+  refresh();
+})();
+</script>

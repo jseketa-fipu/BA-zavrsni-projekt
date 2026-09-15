@@ -114,6 +114,7 @@
   .tray { margin-top: 1rem; border: 1px solid var(--rule); border-left: 3px solid var(--wait); border-radius: 2px; padding: .8rem .9rem; background: #eef0ea; }
   .tray h3 { margin: 0 0 .35rem; font-size: .85rem; font-weight: 600; }
   .tray ul { margin: 0 0 .7rem; padding-left: 1rem; }
+  .tray .note { font-size: .78rem; color: var(--ink-soft); margin: .6rem 0 0; }
   .tray li { font-family: var(--mono); font-size: .76rem; color: var(--ink-soft); word-break: break-all; }
 
   .ledger { margin-top: 3rem; }
@@ -447,6 +448,7 @@
 
     return {
       account,
+      balance: await contract.runner.provider.getBalance(account),
       quorum: Number(await contract.quorum()),
       myRoles: new Set(
         (await Promise.all(
@@ -612,12 +614,24 @@
   function renderTray() {
     const queued = state.pending;
     if (!queued.length) return void ($("tray").innerHTML = "");
+
+    // Say exactly what pressing the button will do, and who pays for it.
+    const quorum = state.backend.quorum;
+    const after = (state.record ? countSignOffs(state.record) : 0) + queued.length;
+    const outcome = after >= quorum ? "released" : "still awaiting sign-off";
+    const broke = state.backend.balance === 0n;
     $("tray").innerHTML =
       '<div class="tray"><h3>' + queued.length + " signature" + (queued.length > 1 ? "s" : "") +
       " ready to submit</h3><ul>" +
       queued.map((p) => "<li>" + roleLabel(p.role) + " &middot; " + shortAddr(p.signer) +
         " &middot; " + p.signature.slice(0, 22) + "…</li>").join("") +
-      '</ul><button class="solid" id="submitBtn">Submit to the chain</button></div>';
+      '</ul><button class="solid" id="submitBtn"' + (broke ? " disabled" : "") + ">Submit " +
+      queued.length + " signature" + (queued.length > 1 ? "s" : "") + " &rarr; " + after + " of " +
+      quorum + ", " + outcome + "</button>" +
+      '<p class="note">' + (broke
+        ? "This account has no ETH, so it cannot pay to submit. Switch to the publisher's account."
+        : "One transaction; whoever presses this pays the gas. Reviewers can stop after signing.") +
+      "</p></div>";
     $("submitBtn").addEventListener("click", doSubmit);
   }
 

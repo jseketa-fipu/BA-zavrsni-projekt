@@ -68,8 +68,10 @@ needs a permission. Reviewers can change without touching the ledger.
 
 ## 5. Demo (4 min)
 
-Before: `anvil` running, contract deployed, roles granted, page served,
-MetaMask on chain 31337.
+Before: page served (`cd web && python -m http.server 8000`), opened at
+`http://localhost:8000/?chain=11155111&registry=0x46338322996A574DED8aBC2D1c041aE292fd12EB&from=11712685`,
+MetaMask unlocked. Contracts are already on Sepolia. Fallback: Anvil
+(`anvil` + `forge script script/Deploy.s.sol --rpc-url anvil …`, no URL params).
 
 | Do | Say |
 |---|---|

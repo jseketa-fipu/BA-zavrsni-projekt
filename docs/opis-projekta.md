@@ -99,6 +99,16 @@ bio multisig novčanik. Skupno slanje nema gornju granicu broja potpisa. Stranic
 učitava ethers.js s CDN-a, pa demo treba pristup internetu (ili lokalnu kopiju
 biblioteke).
 
+## Postavljeno na Sepolia testnu mrežu
+
+| Ugovor | Adresa |
+|---|---|
+| AccessRegistry | `0xb605d7641Fe9Bb70cA05d2d09c4425169E214560` |
+| ArtifactRegistry | `0x46338322996A574DED8aBC2D1c041aE292fd12EB` |
+
+Blok 11712685. Izvorni kod je verificiran (Sourcify), pa se može pročitati na
+https://eth-sepolia.blockscout.com/address/0x46338322996A574DED8aBC2D1c041aE292fd12EB
+
 ## Pokretanje
 
 ```bash

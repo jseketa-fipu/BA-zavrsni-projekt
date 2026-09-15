@@ -10,6 +10,19 @@ Two contracts: `AccessRegistry` holds who may publish and who has which role;
 `ArtifactRegistry` is the ledger and asks the access contract whenever it
 needs to know.
 
+## Deployed on Sepolia
+
+| Contract | Address |
+|---|---|
+| AccessRegistry | [`0xb605d7641Fe9Bb70cA05d2d09c4425169E214560`](https://eth-sepolia.blockscout.com/address/0xb605d7641Fe9Bb70cA05d2d09c4425169E214560) |
+| ArtifactRegistry | [`0x46338322996A574DED8aBC2D1c041aE292fd12EB`](https://eth-sepolia.blockscout.com/address/0x46338322996A574DED8aBC2D1c041aE292fd12EB) |
+
+Deployed in block 11712685. Page URL for Sepolia (served locally, see below):
+
+```
+http://localhost:8000/?chain=11155111&registry=0x46338322996A574DED8aBC2D1c041aE292fd12EB&from=11712685
+```
+
 ## Files
 
 ```

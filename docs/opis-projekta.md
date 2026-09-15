@@ -61,15 +61,17 @@ drugoj.
 
 | Datoteka | Sadržaj |
 |---|---|
-| `src/ArtifactRegistry.sol` | pametni ugovor — jedino što se postavlja na lanac (oko 120 linija koda uz OpenZeppelin `EIP712` i `ECDSA`) |
-| `test/ArtifactRegistry.t.sol` | 19 Foundry testova, uključujući potpisivanje pravim ključevima i fuzz test |
+| `src/AccessRegistry.sol` | ugovor s ovlastima: tko smije registrirati buildove i tko ima koju ulogu |
+| `src/ArtifactRegistry.sol` | ugovor-evidencija: zapisi, kvorum, potpisi, povlačenje; za ovlasti poziva `AccessRegistry` (ukupno oko 150 linija koda uz OpenZeppelin `EIP712` i `ECDSA`) |
+| `script/Deploy.s.sol` | skripta koja postavlja oba ugovora, povezuje ih i dodjeljuje uloge |
+| `test/ArtifactRegistry.t.sol` | 21 Foundry test, uključujući potpisivanje pravim ključevima i fuzz test |
 | `web/index.html` | frontend u jednoj datoteci: demo način bez lanca i pravi način preko MetaMaska |
 | `tools/verify-frontend.mjs` | Node skripta koja provjerava da se ABI i EIP-712 definicije na stranici slažu s prevedenim ugovorom |
 | `docs/screenshots/` | snimke zaslona pet stanja aplikacije |
 
 ## Testiranje
 
-`forge test` pokreće 19 testova: registracija i zabrana prepisivanja, kvorum,
+`forge test` pokreće 21 test: registracija i zabrana prepisivanja, kvorum,
 odbijanje potpisa s krivim ključem ili bez uloge, zabrana ponovnog slanja istog
 potpisa, istek roka, neprenosivost potpisa na drugu instancu ugovora,
 odbijanje "zrcalnog" (malleable) potpisa, skupno slanje, povlačenje i fuzz
@@ -78,6 +80,9 @@ provjerava JavaScript stranu na lokalnom Anvil lancu.
 
 ## Odluke u dizajnu
 
+- **Dva ugovora koji surađuju.** Ovlasti (izdavači, uloge) su u `AccessRegistry`,
+  a evidencija ih pri svakoj provjeri dohvaća vanjskim pozivom. Recenzenti se
+  mogu mijenjati bez ponovnog postavljanja evidencije.
 - **Bez nonce-a u potpisanoj poruci.** Svaki par (build, uloga) može se
   potpisati samo jednom, pa se potpis ne može ponovno iskoristiti.
 - **OpenZeppelin `EIP712` i `ECDSA`** računaju domenski hash i iz potpisa
@@ -99,9 +104,7 @@ biblioteke).
 ```bash
 forge test                                   # testovi
 anvil                                        # lokalni lanac
-forge create src/ArtifactRegistry.sol:ArtifactRegistry \
-  --rpc-url http://127.0.0.1:8545 --broadcast --constructor-args 3 \
-  --private-key <anvil ključ 0>
+forge script script/Deploy.s.sol --rpc-url anvil --broadcast --private-key <anvil ključ 0>
 cd web && python -m http.server 8000         # http://localhost:8000/?registry=<adresa>
 ```
 

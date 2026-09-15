@@ -6,13 +6,18 @@ server, QA, security review — have signed it. Reviewers sign in their wallet
 for free (EIP-712); one transaction submits all signatures. Anyone can verify
 a build with a free read.
 
+Two contracts: `AccessRegistry` holds who may publish and who has which role;
+`ArtifactRegistry` is the ledger and asks the access contract whenever it
+needs to know.
+
 ## Files
 
 ```
-src/ArtifactRegistry.sol      the contract (the only thing deployed)
-script/Deploy.s.sol           deploys it and grants the roles
+src/AccessRegistry.sol        publishers and roles (owner-managed)
+src/ArtifactRegistry.sol      the ledger; calls AccessRegistry for permissions
+script/Deploy.s.sol           deploys both, wires them, grants the roles
 lib/openzeppelin-contracts    OpenZeppelin v5.7 (EIP712, ECDSA)
-test/ArtifactRegistry.t.sol   19 Foundry tests
+test/ArtifactRegistry.t.sol   21 Foundry tests
 web/index.html                the frontend, one file (demo mode + MetaMask)
 tools/verify-frontend.mjs     optional: checks the page's ABI against the contract
 lib/forge-std                 Foundry test library (git submodule)
@@ -24,17 +29,16 @@ lib/forge-std                 Foundry test library (git submodule)
 forge test                                   # 1. tests
 
 anvil                                        # 2. local chain (keep running)
-forge create src/ArtifactRegistry.sol:ArtifactRegistry \
-  --rpc-url http://127.0.0.1:8545 --broadcast --constructor-args 3 \
+forge script script/Deploy.s.sol --rpc-url anvil --broadcast \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-#   -> 0x5FbDB2315678afecb367f032d93F642f64180aa3
+#   prints the AccessRegistry and ArtifactRegistry addresses
 
 cd web && python -m http.server 8000         # 3. open http://localhost:8000/?registry=0x5FbD...0aa3
 ```
 
 Click **Connect wallet**; the page asks MetaMask to switch to the Anvil chain
-(31337). Grant roles to your accounts with `cast send <registry>
-"setRole(address,bytes32,bool)" <account> $(cast keccak QA) true ...`.
+(31337). The deploy script gives the deployer all roles; grant others with
+`cast send <access> "setRole(address,bytes32,bool)" <account> $(cast keccak QA) true ...`.
 Without a wallet the page runs in demo mode.
 
 Optional: `forge build && npm install && node tools/verify-frontend.mjs`
@@ -42,6 +46,8 @@ Optional: `forge build && npm install && node tools/verify-frontend.mjs`
 
 ## Design notes
 
+- **Permissions in their own contract** — the ledger calls `AccessRegistry`
+  instead of storing roles; reviewers can change without touching the ledger.
 - **No nonce in the signed message** — each (build, role) can be signed once.
 - **OpenZeppelin `EIP712` + `ECDSA`** build the domain hash and recover the
   signer; the role, quorum and replay rules are in the contract itself.

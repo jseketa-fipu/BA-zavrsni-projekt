@@ -56,6 +56,10 @@ signature made for one deployment or one network is useless on any other.
                                         anyone ──verify()──▶ free read
 ```
 
+Two contracts: **AccessRegistry** (who may publish, who holds which role)
+and **ArtifactRegistry** (the ledger), which calls the first one whenever it
+needs a permission. Reviewers can change without touching the ledger.
+
 - **Register**: the publisher records the SHA-256 of the build. One paid
   transaction.
 - **Sign**: each role signs in their wallet. Free.
@@ -69,7 +73,7 @@ MetaMask on chain 31337.
 
 | Do | Say |
 |---|---|
-| `forge test` — 19 tests pass | "Tests sign with real keys, nothing is mocked." |
+| `forge test` — 21 tests pass | "Tests sign with real keys, nothing is mocked." |
 | Drop a file → **Not in the registry** | "Hashed locally. Only the 32-byte digest goes to the chain." |
 | Register (MetaMask confirm) | "That is the one paid write." |
 | Sign as Build, QA, Security (MetaMask *Sign*, not *Confirm*) | "No transaction happened — look, the balance is unchanged." |
@@ -96,8 +100,9 @@ screens from an in-memory ledger. Say so honestly.
 | What does OpenZeppelin do here? | `EIP712` builds the domain hash; `ECDSA.recover` checks the signature's length, rejects its mirror-twin form and the zero address, and returns the signer. Roles, quorum and replay rules are mine. |
 | Can a revoked build come back? | No. Fix it, and the new file gets a new digest. |
 | Gas cost? | ~64k for one signature, ~137k for a batch of three. |
+| Why two contracts? | Permissions and data are different concerns. The ledger asks `AccessRegistry` "does X hold role R?" via an external call; swap or extend the access rules without redeploying the ledger. |
 
 ## 8. Close
 
 "Reading is free, writing is rare, and no single party can approve a release
-alone. About 120 lines of Solidity on top of OpenZeppelin, 19 tests."
+alone. Two contracts, about 150 lines of Solidity on top of OpenZeppelin, 21 tests."

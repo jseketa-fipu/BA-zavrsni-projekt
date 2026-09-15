@@ -2,10 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {ArtifactRegistry} from "../src/ArtifactRegistry.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {AccessRegistry} from "../src/AccessRegistry.sol";
+import {ArtifactRegistry} from "../src/ArtifactRegistry.sol";
 
-/// @notice Tests for ArtifactRegistry, written in Solidity and run by Foundry.
+/// @notice Tests for ArtifactRegistry + AccessRegistry, written in Solidity
+///         and run by Foundry.
 ///
 /// @dev Foundry gives tests "cheatcodes" through `vm`:
 ///        vm.addr(pk)          - the address that belongs to a private key
@@ -22,6 +24,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///      `vm.prank(relayer); registry.attest(a, _sign(...))` used up the prank
 ///      on that read, so attest was actually sent by the owner.
 contract ArtifactRegistryTest is Test {
+    AccessRegistry access;
     ArtifactRegistry registry;
 
     address vendor = address(0xA11CE);
@@ -45,12 +48,13 @@ contract ArtifactRegistryTest is Test {
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
     function setUp() public {
-        // This test contract deploys the registry, so it is the owner.
-        registry = new ArtifactRegistry(3);
-        registry.setPublisher(vendor, true);
-        registry.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), true);
-        registry.setRole(vm.addr(qaPk), registry.ROLE_QA(), true);
-        registry.setRole(vm.addr(secPk), registry.ROLE_SECURITY(), true);
+        // This test contract deploys both, so it owns the access registry.
+        access = new AccessRegistry();
+        registry = new ArtifactRegistry(3, access);
+        access.setPublisher(vendor, true);
+        access.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), true);
+        access.setRole(vm.addr(qaPk), registry.ROLE_QA(), true);
+        access.setRole(vm.addr(secPk), registry.ROLE_SECURITY(), true);
 
         vm.prank(vendor);
         registry.register(DIGEST, "1.2.3");
@@ -105,6 +109,32 @@ contract ArtifactRegistryTest is Test {
 
     function _released(bytes32 digest) internal view returns (bool released) {
         (, released) = registry.verify(digest);
+    }
+
+    // ------------------------------------------------------------- access
+
+    /// @dev The ledger has no role storage of its own: everything it knows
+    ///      about roles comes from the AccessRegistry it was deployed with.
+    function test_rolesComeFromTheAccessContract() public {
+        assertEq(address(registry.access()), address(access));
+
+        // Take QA away on the access contract; the ledger sees it at once.
+        access.setRole(vm.addr(qaPk), registry.ROLE_QA(), false);
+        ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_QA(), qaPk);
+        vm.expectRevert(ArtifactRegistry.RoleNotHeld.selector);
+        registry.attest(a, _sign(qaPk, a));
+    }
+
+    function test_onlyAccessOwnerChangesRoles() public {
+        bytes32 qa = registry.ROLE_QA(); // read it first: see the note on "NEXT call" above
+
+        vm.prank(stranger);
+        vm.expectRevert(AccessRegistry.NotOwner.selector);
+        access.setRole(stranger, qa, true);
+
+        vm.prank(stranger);
+        vm.expectRevert(AccessRegistry.NotOwner.selector);
+        access.setPublisher(stranger, true);
     }
 
     // ------------------------------------------------------------ registry
@@ -193,14 +223,15 @@ contract ArtifactRegistryTest is Test {
         registry.attest(a, _sign(qaPk, a));
     }
 
-    /// @dev A signature for one deployment is useless on another, because the
+    /// @dev A signature for one ledger is useless on another, because the
     ///      contract address is part of what gets signed (EIP-712 domain).
+    ///      Both ledgers share the same access contract, so the roles match -
+    ///      it is purely the signature that fails.
     function test_signatureDoesNotCarryToAnotherDeployment() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_QA(), qaPk);
         bytes memory sig = _sign(qaPk, a); // made for `registry`
 
-        ArtifactRegistry twin = new ArtifactRegistry(3);
-        twin.setRole(vm.addr(qaPk), twin.ROLE_QA(), true);
+        ArtifactRegistry twin = new ArtifactRegistry(3, access);
         twin.register(DIGEST, "1.2.3");
 
         vm.expectRevert(ArtifactRegistry.BadSignature.selector);
@@ -244,7 +275,7 @@ contract ArtifactRegistryTest is Test {
     /// @dev Losing a role does not undo signatures already given.
     function test_pastSignOffSurvivesLosingTheRole() public {
         _attestAs(buildPk, registry.ROLE_BUILD());
-        registry.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), false);
+        access.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), false);
 
         assertEq(registry.signedBy(DIGEST, registry.ROLE_BUILD()), vm.addr(buildPk));
     }
@@ -273,7 +304,7 @@ contract ArtifactRegistryTest is Test {
     }
 
     function test_onlyOriginalPublisherRevokes() public {
-        registry.setPublisher(stranger, true); // a publisher, but not this build's
+        access.setPublisher(stranger, true); // a publisher, but not this build's
         vm.prank(stranger);
         vm.expectRevert(ArtifactRegistry.NotTheOriginalPublisher.selector);
         registry.revoke(DIGEST, "not mine");

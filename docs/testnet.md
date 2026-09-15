@@ -36,16 +36,17 @@ uses it (and asks for the password).
 forge script script/Deploy.s.sol --rpc-url sepolia --account deployer --broadcast
 ```
 
-The script deploys the registry with quorum 3 and grants the deployer all
-three roles (publisher rights come with deploying). It prints:
+The script deploys `AccessRegistry`, then `ArtifactRegistry` pointing at it,
+and grants the deployer all three roles (publisher rights come with deploying
+the access contract). It prints:
 
 ```
+AccessRegistry:   0x...
 ArtifactRegistry: 0x...
 publisher + all roles: 0x...
-deployed in block: N
 ```
 
-Keep the address. The printed block number is from the simulation and may be
+Keep both addresses; the page only needs the ArtifactRegistry one. The printed block number is from the simulation and may be
 off by a few; the exact deployment block is in the transaction record
 `broadcast/Deploy.s.sol/11155111/run-latest.json` (`receipts[0].blockNumber`,
 in hex) or on the explorer page for the address.
@@ -53,8 +54,11 @@ in hex) or on the explorer page for the address.
 ## 4. Verify the source (so the grader can read it on the explorer)
 
 ```bash
-forge verify-contract <address> src/ArtifactRegistry.sol:ArtifactRegistry \
-  --chain sepolia --verifier sourcify --constructor-args $(cast abi-encode "constructor(uint8)" 3)
+forge verify-contract <access address> src/AccessRegistry.sol:AccessRegistry \
+  --chain sepolia --verifier sourcify
+forge verify-contract <registry address> src/ArtifactRegistry.sol:ArtifactRegistry \
+  --chain sepolia --verifier sourcify \
+  --constructor-args $(cast abi-encode "constructor(uint8,address)" 3 <access address>)
 ```
 
 Sourcify needs no API key. Blockscout picks it up automatically:
@@ -85,7 +89,7 @@ three times (signatures, free), Submit (one transaction), Revoke.
 To demo with separate accounts per role instead of one:
 
 ```bash
-cast send <address> "setRole(address,bytes32,bool)" <reviewer> $(cast keccak QA) true \
+cast send <access address> "setRole(address,bytes32,bool)" <reviewer> $(cast keccak QA) true \
   --rpc-url sepolia --account deployer
 ```
 

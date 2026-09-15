@@ -4,10 +4,10 @@
 //   anvil                                         # in another terminal
 //   npm install && node tools/verify-frontend.mjs
 //
-// It deploys a fresh registry every run (so it can be re-run against a
+// It deploys fresh contracts every run (so it can be re-run against a
 // long-lived Anvil), pulls the ABI and the EIP-712 `types` object out of
 // web/index.html so the exact strings the browser uses are what is under
-// test, and then drives the contract directly through ethers 6.13.2 - the
+// test, and then drives the contracts directly through ethers 6.13.2 - the
 // same pinned version the page loads from the CDN.
 //
 // Behavioural rules (quorum, replay, revocation) are forge's job. This only
@@ -22,9 +22,11 @@ const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 const page = read("../web/index.html");
 const fromPage = (re) => new Function("return " + page.match(re)[1])();
 const ABI = fromPage(/const ABI = (\[[\s\S]*?\]);/);
+const ACCESS_ABI = fromPage(/const ACCESS_ABI = (\[[\s\S]*?\]);/);
 const types = fromPage(/const types = (\{[\s\S]*?\});/);
 const [, name, version] = page.match(/name: "([^"]+)",\s*version: "([^"]+)"/);
 const artifact = JSON.parse(read("../out/ArtifactRegistry.sol/ArtifactRegistry.json"));
+const accessArtifact = JSON.parse(read("../out/AccessRegistry.sol/AccessRegistry.json"));
 
 let failures = 0;
 const ok = (label, cond, extra = "") => {
@@ -49,8 +51,11 @@ const [owner, build, qa, sec, relayer] = [0, 1, 2, 3, 4].map((i) => root.deriveC
 const reviewers = [[build, "BUILD"], [qa, "QA"], [sec, "SECURITY"]];
 const roleHash = (r) => id(r); // keccak256 of the UTF-8 name, as the page does
 
-console.log("1. deploy from out/ and prove the page's ABI against the compiled one");
-const full = await new ContractFactory(artifact.abi, artifact.bytecode.object, owner).deploy(3);
+console.log("1. deploy both contracts from out/ and prove the page's ABI against the compiled one");
+const access = await new ContractFactory(accessArtifact.abi, accessArtifact.bytecode.object, owner).deploy();
+await access.waitForDeployment();
+const full = await new ContractFactory(artifact.abi, artifact.bytecode.object, owner)
+  .deploy(3, await access.getAddress());
 await full.waitForDeployment();
 const registry = new Contract(await full.getAddress(), ABI, owner); // the page's view of it
 const compiled = new Interface(artifact.abi).format(true);
@@ -58,11 +63,16 @@ const declared = new Interface(ABI).format(true);
 ok("every page ABI fragment exists in the compiled ABI", declared.every((f) => compiled.includes(f)));
 ok("page declares every contract error",
   compiled.filter((f) => f.startsWith("error ")).every((f) => declared.includes(f)));
+ok("page's access ABI fragments exist in the compiled AccessRegistry ABI",
+  new Interface(ACCESS_ABI).format(true).every((f) => new Interface(accessArtifact.abi).format(true).includes(f)));
 ok("page's EIP-712 types hash to ATTESTATION_TYPEHASH",
   id(TypedDataEncoder.from(types).encodeType("Attestation")) === await full.ATTESTATION_TYPEHASH());
 
-console.log("2. grant roles, register a build, read it back");
-for (const [w, r] of reviewers) await (await full.setRole(w.address, roleHash(r), true)).wait();
+console.log("2. grant roles on the access contract, register a build, read it back");
+for (const [w, r] of reviewers) await (await access.setRole(w.address, roleHash(r), true)).wait();
+const pageAccess = new Contract(await registry.access(), ACCESS_ABI, owner); // as the page finds it
+ok("page reaches the access contract through registry.access()",
+  (await pageAccess.holdsRole(qa.address, roleHash("QA"))) === true);
 const DIGEST = id("gateway-2.6.0.bin");
 ok("unknown digest reads as ZeroAddress publisher",
   (await registry.verify(DIGEST)).record.publisher === ZeroAddress);

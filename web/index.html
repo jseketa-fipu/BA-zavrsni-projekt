@@ -237,14 +237,13 @@
     "function attestBatch((bytes32 digest,bytes32 role,address signer,uint256 deadline)[] list, bytes[] signatures)",
     "function verify(bytes32 digest) view returns ((address publisher,uint64 registeredAt,bool revoked,uint8 signOffs,string version) record, bool released)",
     "function signedBy(bytes32, bytes32) view returns (address)",
-    "function holdsRole(address, bytes32) view returns (bool)",
     "function quorum() view returns (uint8)",
+    "function access() view returns (address)",
     "event Registered(bytes32 indexed digest, address indexed publisher, string version)",
     "event Revoked(bytes32 indexed digest, address indexed publisher, string reason)",
 
     // The errors must be listed too: a failed call only returns a 4-byte
     // code, and ethers needs these to turn that code back into a name.
-    "error NotOwner()",
     "error NotPublisher()",
     "error AlreadyRegistered()",
     "error UnknownDigest()",
@@ -264,6 +263,10 @@
     "error LengthMismatch()",
     "error QuorumOutOfRange()"
   ];
+
+  // The registry keeps no role list of its own; it points at an
+  // AccessRegistry contract, and the page asks that one who holds what.
+  const ACCESS_ABI = ["function holdsRole(address, bytes32) view returns (bool)"];
 
   const ROLES = [
     { key: "BUILD", label: "Build server" },
@@ -439,12 +442,15 @@
       }
     }
 
+    // One extra read: which AccessRegistry this ledger trusts.
+    const access = new window.ethers.Contract(await contract.access(), ACCESS_ABI, contract.runner);
+
     return {
       account,
       quorum: Number(await contract.quorum()),
       myRoles: new Set(
         (await Promise.all(
-          ROLES.map(async (r) => (await contract.holdsRole(account, roleHash(r.key))) && r.key)
+          ROLES.map(async (r) => (await access.holdsRole(account, roleHash(r.key))) && r.key)
         )).filter(Boolean)
       ),
       list,

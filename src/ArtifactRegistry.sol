@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {AccessRegistry} from "./AccessRegistry.sol";
 
 /// @title  ArtifactRegistry
 /// @notice A public record of software builds and who approved them.
@@ -22,12 +23,16 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///         transaction. Checking a build is a free read. So writing is rare
 ///         and paid, reading is unlimited and free.
 ///
-/// @dev Two OpenZeppelin pieces are used: `EIP712` computes the domain hash
+/// @dev Two contracts work together. This one is the ledger: it stores the
+///      builds and enforces the rules (quorum, no replay, revocation). Who is
+///      a publisher and who holds which role is kept in a separate
+///      `AccessRegistry`, which this contract calls whenever it needs to know.
+///
+///      Two OpenZeppelin pieces are used: `EIP712` computes the domain hash
 ///      that ties signatures to this contract and this chain, and
 ///      `ECDSA.recoverCalldata` turns a signature back into the signer's
 ///      address (checking its length, rejecting the "mirror twin" form of a
-///      signature, and rejecting the zero address). Everything about roles,
-///      quorum, replay and revocation is in this file.
+///      signature, and rejecting the zero address).
 contract ArtifactRegistry is EIP712 {
     // =====================================================================
     //                                TYPES
@@ -73,21 +78,15 @@ contract ArtifactRegistry is EIP712 {
     //                                STATE
     // =====================================================================
 
-    // `immutable` = set once in the constructor, then baked into the code.
-    // Cheaper to read than normal storage.
-
-    address public immutable owner;
+    /// @notice The contract that says who may publish and who holds which
+    ///         role. Fixed at deployment (`immutable`: baked into the code,
+    ///         cheap to read).
+    AccessRegistry public immutable access;
 
     /// @notice How many roles must sign before a build counts as released.
     /// @dev Fixed at deployment. If it could be lowered later, builds that
     ///      were half-approved would suddenly become "released".
     uint8 public immutable quorum;
-
-    /// @notice Who is allowed to register builds.
-    mapping(address => bool) public isPublisher;
-
-    /// @notice Who holds which role. account => role => yes/no
-    mapping(address => mapping(bytes32 => bool)) public holdsRole;
 
     /// @notice Who signed which role on which build. digest => role => signer.
     ///         Zero address = not signed yet. Once set, never cleared - this is
@@ -108,8 +107,6 @@ contract ArtifactRegistry is EIP712 {
     event Attested(bytes32 indexed digest, bytes32 indexed role, address indexed signer);
     event Released(bytes32 indexed digest, uint8 signOffs);
     event Revoked(bytes32 indexed digest, address indexed publisher, string reason);
-    event PublisherSet(address indexed publisher, bool allowed);
-    event RoleSet(address indexed account, bytes32 indexed role, bool held);
 
     // =====================================================================
     //                                ERRORS
@@ -119,7 +116,6 @@ contract ArtifactRegistry is EIP712 {
     ///      and the frontend turns the name into a readable message. Malformed
     ///      signatures revert with OpenZeppelin's own `ECDSAInvalidSignature*`
     ///      errors; `BadSignature` means "valid, but not from the claimed signer".
-    error NotOwner();
     error NotPublisher();
     error AlreadyRegistered();
     error UnknownDigest();
@@ -133,43 +129,14 @@ contract ArtifactRegistry is EIP712 {
     error LengthMismatch();
     error QuorumOutOfRange();
 
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
     /// @param quorum_ How many roles must sign (1 to 3).
+    /// @param access_ The AccessRegistry to ask about publishers and roles.
     /// @dev `EIP712("ArtifactRegistry", "1")` sets the name and version that go
-    ///      into every signature's domain; the frontend uses the same two
-    ///      strings. Weak point to be aware of: the owner is one address that
-    ///      hands out all the roles, so the whole thing is only as safe as that
-    ///      key. In production the owner would be a multisig wallet.
-    constructor(uint8 quorum_) EIP712("ArtifactRegistry", "1") {
+    ///      into every signature's domain; the frontend uses the same strings.
+    constructor(uint8 quorum_, AccessRegistry access_) EIP712("ArtifactRegistry", "1") {
         if (quorum_ == 0 || quorum_ > 3) revert QuorumOutOfRange();
-
-        owner = msg.sender;
         quorum = quorum_;
-        isPublisher[msg.sender] = true;
-
-        emit PublisherSet(msg.sender, true);
-    }
-
-    // =====================================================================
-    //                             ADMINISTRATION
-    // =====================================================================
-
-    /// @notice Allow (or disallow) an address to register builds.
-    function setPublisher(address publisher, bool allowed) external onlyOwner {
-        isPublisher[publisher] = allowed;
-        emit PublisherSet(publisher, allowed);
-    }
-
-    /// @notice Give (or take away) a role.
-    /// @dev Taking a role away does not undo signatures already given. A
-    ///      signature records what was true at the time it was made.
-    function setRole(address account, bytes32 role, bool held) external onlyOwner {
-        holdsRole[account][role] = held;
-        emit RoleSet(account, role, held);
+        access = access_;
     }
 
     // =====================================================================
@@ -180,7 +147,8 @@ contract ArtifactRegistry is EIP712 {
     /// @dev A digest can be registered only once. Records are never deleted or
     ///      overwritten, only revoked.
     function register(bytes32 digest, string calldata version) external {
-        if (!isPublisher[msg.sender]) revert NotPublisher();
+        // Ask the access contract, not our own storage.
+        if (!access.isPublisher(msg.sender)) revert NotPublisher();
 
         // "Already registered" means: a publisher is stored for this digest.
         if (_artifacts[digest].publisher != address(0)) revert AlreadyRegistered();
@@ -223,7 +191,7 @@ contract ArtifactRegistry is EIP712 {
         if (art.publisher == address(0)) revert UnknownDigest();
         if (art.revoked) revert ArtifactRevoked();
         if (block.timestamp > a.deadline) revert SignatureExpired();
-        if (!holdsRole[a.signer][a.role]) revert RoleNotHeld();
+        if (!access.holdsRole(a.signer, a.role)) revert RoleNotHeld();
         if (signedBy[a.digest][a.role] != address(0)) revert RoleAlreadySigned();
 
         // Recover the address that made the signature; it must be the one

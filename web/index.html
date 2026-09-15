@@ -816,6 +816,19 @@
       state.backend = await chainBackend(contract, await signer.getAddress());
       state.pending = []; // demo signatures are fakes; never relay them
 
+      // MetaMask fires this when the user switches account. Rebuild the chain
+      // backend for the new signer but KEEP the tray: a signature belongs to
+      // whoever made it, so reviewers can take turns in one page.
+      window.ethereum.on("accountsChanged", async (accounts) => {
+        if (!accounts.length) return;
+        const next = await new ethers.BrowserProvider(window.ethereum).getSigner();
+        const nextContract = new ethers.Contract(addr.trim(), ABI, next);
+        state.backend = await chainBackend(nextContract, await next.getAddress());
+        $("connLabel").textContent = shortAddr(state.backend.account);
+        if (state.digest) state.record = await state.backend.lookup(state.digest);
+        await refresh();
+      });
+
       $("dot").classList.add("live");
       $("connLabel").textContent = shortAddr(state.backend.account);
       $("connectBtn").remove();

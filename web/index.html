@@ -150,6 +150,7 @@
     <div class="conn">
       <span class="dot" id="dot"></span>
       <span id="connLabel">Local demo, no wallet</span>
+      <input type="text" id="registryAddr" placeholder="registry address 0x…" size="24">
       <button class="quiet" id="connectBtn">Connect wallet</button>
     </div>
   </div>
@@ -209,35 +210,27 @@
   /* =====================================================================
      ArtifactRegistry - browser client
 
-     Three ideas are worth following through this file:
+     Three things to know about this file:
 
-     1. HASHING IS LOCAL. The file never leaves the machine. `crypto.subtle`
-        computes its SHA-256 in the browser and only those 32 bytes are ever
-        sent to the chain. Checking a 4 GB firmware image costs the network
-        nothing.
+     1. The file is hashed in the browser. It never leaves the machine; only
+        its 32-byte SHA-256 is sent to the chain.
 
-     2. READING IS FREE, WRITING IS NOT. `verify` and `signedBy` are view
-        calls: no wallet, no gas, answered by the node from local state.
-        `register`, `revoke` and `attestBatch` are transactions: signed,
-        mined, paid for. Every `await tx.wait()` below marks that boundary.
+     2. Reading is free, writing costs gas. `verify` and `signedBy` are read
+        calls - no wallet, no transaction. `register`, `revoke` and
+        `attestBatch` are transactions that MetaMask asks you to confirm.
 
-     3. SIGNING IS NOT SENDING. A reviewer signing off produces a signature
-        in memory and nothing else - no transaction, no gas, no funded
-        account. Signatures pile up in the tray until somebody relays them
-        together. That separation is the whole point of the design, so the
-        UI is built to make it visible.
+     3. Signing is not sending. A reviewer signing off just produces a
+        signature in memory - no transaction, no gas. Signatures collect in
+        the tray until someone presses Submit.
 
-     Everything the chain does sits behind one small interface - `list`,
-     `lookup`, `register`, `revoke`, `sign`, `submit` - with two
-     implementations: `demoBackend` (in-memory, no chain) and `chainBackend`
-     (ethers + MetaMask). The rest of the file cannot tell them apart.
+     All chain access goes through one small interface (list, lookup,
+     register, revoke, sign, submit) with two implementations: demoBackend
+     (in-memory, no chain) and chainBackend (ethers + MetaMask). The rest of
+     the page does not know which one it is talking to.
      ===================================================================== */
 
-  // The ABI is how ethers learns to encode calls. Only what the UI actually
-  // uses is listed - a full ABI would work, this is just easier to read.
-  // Note `verify` returns a named tuple, so results come back as `rec.publisher`
-  // rather than `rec[0]`, and `Registered` is here because the ledger listing
-  // is built from its logs.
+  // The ABI tells ethers what functions, events and errors the contract has.
+  // Only the parts the page uses are listed.
   const ABI = [
     "function register(bytes32 digest, string version)",
     "function revoke(bytes32 digest, string reason)",
@@ -249,13 +242,8 @@
     "event Registered(bytes32 indexed digest, address indexed publisher, string version)",
     "event Revoked(bytes32 indexed digest, address indexed publisher, string reason)",
 
-    // The custom errors MUST be declared here too. A revert arrives as four
-    // raw bytes - `0x3a81d6fc` and nothing else - and ethers can only turn
-    // that back into a name if it holds the matching fragment. Leave these
-    // out and every failure reads "execution reverted (unknown custom
-    // error)", which is the same wall of nothing a require string was
-    // supposed to save you from. This is the cost of custom errors, and it
-    // is paid here, once.
+    // The errors must be listed too: a failed call only returns a 4-byte
+    // code, and ethers needs these to turn that code back into a name.
     "error NotOwner()",
     "error NotPublisher()",
     "error AlreadyRegistered()",
@@ -298,10 +286,8 @@
   const countSignOffs = (rec) => ROLES.filter((r) => rec.signOffs[r.key]).length;
   const isReleased = (rec) => !rec.revoked && countSignOffs(rec) >= state.backend.quorum;
 
-  // Anything that reaches innerHTML goes through here first. Version strings
-  // and revocation reasons are written by other people - on a public chain,
-  // by strangers - so they are untrusted input in the XSS sense even though
-  // they arrived over a blockchain.
+  // Escape text before putting it in HTML. Version strings and revoke reasons
+  // are written by other people, so treat them as untrusted.
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -311,16 +297,14 @@
     : n < 1048576 ? (n / 1024).toFixed(1) + " kB"
     : (n / 1048576).toFixed(2) + " MB";
 
-  /// The one piece of real cryptography the browser does. SubtleCrypto is
-  /// built in, so no library is needed and an examiner can reproduce the
-  /// answer with `sha256sum` on the same file.
+  /// SHA-256 of the file, using the browser's built-in crypto. The result is
+  /// the same as `sha256sum file` on the command line.
   async function sha256(file) {
     const out = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
     return "0x" + [...new Uint8Array(out)].map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 
-  // Roles are keccak256 of their name on chain, so the frontend has to hash
-  // them the same way. Loaded lazily because ethers arrives with the wallet.
+  // The contract identifies roles by keccak256 of their name.
   const roleHash = (key) => window.ethers.keccak256(window.ethers.toUtf8Bytes(key));
 
   // =====================================================================
@@ -376,9 +360,8 @@
         const rec = ledger.find((a) => a.digest === digest);
         Object.assign(rec, { revoked: true, reason });
       },
-      // A believable-looking 65 bytes. It is not a real signature and would be
-      // rejected on chain in an instant - which is exactly the difference
-      // between this backend and the next one.
+      // Random bytes that look like a signature. Not real - the chain would
+      // reject it. Demo only.
       sign: async (digest, role) => ({
         role, signer: who[role], deadline: Math.floor(Date.now() / 1000) + 7 * day,
         signature: "0x" + [...crypto.getRandomValues(new Uint8Array(65))]
@@ -398,15 +381,13 @@
   async function chainBackend(contract, account) {
     const ZERO = window.ethers.ZeroAddress;
 
-    /// One view call for the record, three more for the sign-offs. All free,
-    /// all answered from the node's local state - no transaction is involved
-    /// and the wallet never opens.
+    /// Read one build's record and its three sign-offs. All free reads; the
+    /// wallet never opens.
     async function lookup(digest) {
       const { record } = await contract.verify(digest);
       if (record.publisher === ZERO) return null; // never registered
 
-      // Fired off together rather than awaited one at a time: four sequential
-      // round trips to the node become one.
+      // Three reads sent at once instead of one after another.
       const signers = await Promise.all(
         ROLES.map((r) => contract.signedBy(digest, roleHash(r.key)))
       );
@@ -422,9 +403,7 @@
         signOffs
       };
 
-      // The reason for a revocation is only ever in the event log - storing it
-      // would have cost the publisher 20,000 gas per word to hold a string no
-      // contract will ever read.
+      // The revoke reason is only in the event log, not in storage (cheaper).
       if (rec.revoked) {
         const logs = await contract.queryFilter(contract.filters.Revoked(digest));
         if (logs.length) rec.reason = logs[logs.length - 1].args.reason;
@@ -432,29 +411,22 @@
       return rec;
     }
 
-    /// The contract keeps no list of digests, so the ledger is reconstructed
-    /// from `Registered` logs. This is the normal division of labour on chain:
-    /// storage for what contracts must read, events for what humans must read.
-    ///
-    /// Careful on public networks - many RPC providers cap how many blocks one
-    /// `eth_getLogs` may span, so a real deployment would page over ranges or
-    /// let an indexer do it. Against a local Anvil the whole chain is fine.
+    /// The contract keeps no list of builds; the table is rebuilt from the
+    /// `Registered` events. (Fine on a local chain. On a public network you
+    /// would fetch logs in block ranges, because providers limit the span.)
     async function list() {
       const logs = await contract.queryFilter(contract.filters.Registered());
       const digests = [...new Set(logs.map((l) => l.args.digest))];
       return (await Promise.all(digests.map(lookup))).filter(Boolean);
     }
 
-    /// Every write goes through here. `tx.wait()` returns when the transaction
-    /// is in a block, not when it was sent - that is the moment a write is real.
+    /// Every transaction goes through here. `tx.wait()` returns once the
+    /// transaction is in a block.
     ///
-    /// If it reverted, decode the custom error. ethers does this by itself on
-    /// the READ path (staticCall) using the contract's Interface, but a failing
-    /// WRITE is caught earlier, during gas estimation, by the provider - which
-    /// has no ABI - so `e.revert` arrives null and `e.data` holds the raw
-    /// 4-byte selector. `Interface.makeError` is the very call ethers makes on
-    /// the read path; doing it here means nothing else on the page needs to
-    /// know the two paths differ.
+    /// If it failed: ethers decodes error names for reads by itself, but not
+    /// for writes (the error is caught during gas estimation, where ethers
+    /// has no ABI). So we decode it here, once, and the rest of the page can
+    /// always rely on `e.revert.name`.
     async function send(promise) {
       try {
         await (await promise).wait();
@@ -479,16 +451,12 @@
       },
       revoke: (digest, reason) => send(contract.revoke(digest, reason)),
 
-      /// EIP-712: sign structured data, not a hex blob.
+      /// Sign a structured message (EIP-712). MetaMask shows the reviewer the
+      /// fields - digest, role, signer, deadline - and signs them. No
+      /// transaction, no gas; the account can be empty.
       ///
-      /// The wallet shows the reviewer the actual fields - which digest, which
-      /// role - so they can see what they are approving. `domain` must match
-      /// `_buildDomainSeparator` in the contract exactly, and `types` must
-      /// match ATTESTATION_TYPEHASH exactly; one renamed field and the
-      /// recovered address comes out wrong.
-      ///
-      /// This costs nothing. No transaction is created. The reviewer's account
-      /// can be empty, cold, or on a hardware wallet.
+      /// `domain` and `types` must match the contract exactly, or the
+      /// contract will recover a wrong signer address.
       sign: async (digest, role) => {
         const net = await contract.runner.provider.getNetwork();
         const domain = {
@@ -513,8 +481,8 @@
         };
       },
 
-      /// The only transaction in the sign-off flow, and whoever sends it pays
-      /// for all of the signatures inside it.
+      /// The one transaction of the sign-off flow. Whoever sends it pays for
+      /// all the signatures inside.
       submit: (queued) => send(contract.attestBatch(
         queued.map((p) => [p.digest, roleHash(p.role), p.signer, p.deadline]),
         queued.map((p) => p.signature)))
@@ -595,8 +563,8 @@
       .map(([k, val]) => "<div><dt>" + k + "</dt><dd>" + val + "</dd></div>")
       .join("");
 
-    // Three chips: signed on chain, signed but still in the tray, or nothing.
-    // The middle state is the one worth pointing at during a demo.
+    // One chip per role: signed on chain, signed but not yet submitted, or
+    // not signed.
     $("track").hidden = false;
     $("track").innerHTML = ROLES.map((r) => {
       const who = rec.signOffs[r.key];
@@ -629,8 +597,8 @@
     renderTray();
   }
 
-  /// Signatures that exist but have not been relayed yet. Nothing here has
-  /// touched the chain, and closing the tab would lose all of it.
+  /// Signatures collected but not yet sent to the chain. Closing the tab
+  /// loses them (that is fine - signing again is free).
   function renderTray() {
     const queued = state.pending;
     if (!queued.length) return void ($("tray").innerHTML = "");
@@ -648,14 +616,12 @@
     $("err").hidden = false;
   }
 
-  /// Reverts reach here already decoded (see `send` in chainBackend), so the
-  /// custom error's name is on `e.revert.name` whichever path it came from.
+  /// The contract error's name, e.g. "AlreadyRegistered" (see `send`).
   const errorName = (e) => (e && e.revert && e.revert.name) || null;
 
   /// Turn a thrown object into a sentence.
   function explain(e) {
-    // BrowserProvider maps every wallet refusal - account request, transaction
-    // or typed-data signature - onto this one code.
+    // The user clicked Reject in MetaMask.
     if (e && e.code === "ACTION_REJECTED") return "Rejected in the wallet.";
     const said = {
       NotPublisher: "This account is not on the publisher allowlist.",
@@ -670,8 +636,7 @@
       AlreadyRevoked: "That build has already been withdrawn.",
       UnknownDigest: "That digest is not in the registry."
     }[errorName(e)];
-    // A decoded name with no sentence of its own still beats ethers' generic
-    // "execution reverted (unknown custom error)".
+    // If we have no sentence for this error name, show the name itself.
     return said || errorName(e) || (e && (e.shortMessage || e.message)) || "Something went wrong.";
   }
 
@@ -679,9 +644,8 @@
   //                               ACTIONS
   // =====================================================================
 
-  /// Wraps a button for the length of an async action: disabled, relabelled
-  /// while a transaction is in flight, restored if it throws. Every write path
-  /// needs this, so it lives in one place.
+  /// Disable a button while an action runs, show a "waiting" label, and
+  /// restore it (and show the error) if the action fails.
   async function run(btnId, busyLabel, fn) {
     const btn = $(btnId);
     const was = btn.textContent;
@@ -703,8 +667,7 @@
     state.digest = await sha256(file);
     state.pending = []; // signatures belong to one file; a new file starts clean
 
-    // Painted in 8-character groups so it can be read aloud and compared
-    // against `sha256sum` output on screen.
+    // Shown in groups of 8 so it is easy to compare with sha256sum output.
     const groups = state.digest.slice(2).match(/.{1,8}/g) || [];
     $("digest").innerHTML = '<span class="sp">0x</span>' +
       groups.map((g) => "<b>" + g + "</b>").join('<span class="sp">&nbsp;</span>');
@@ -764,9 +727,8 @@
     });
   }
 
-  /// Re-read everything the backend knows and repaint. Called after every
-  /// write, and once at startup - at which point there is no file on the bench
-  /// yet, so the result panel stays hidden.
+  /// Re-read the ledger and repaint. Called after every write and at startup
+  /// (when there is no file yet, so the result panel stays hidden).
   async function refresh() {
     state.ledger = await state.backend.list();
     if (state.digest) renderResult();
@@ -777,8 +739,8 @@
   //                                WALLET
   // =====================================================================
 
-  // Pulled from a CDN at runtime rather than bundled. If the room's network is
-  // hostile, save ethers.umd.min.js next to this file and point src at it.
+  // ethers.js is loaded from a CDN when needed. If there is no internet at
+  // the demo, save ethers.umd.min.js next to this file and change the URL.
   function loadEthers() {
     return new Promise((res, rej) => {
       if (window.ethers) return res(window.ethers);
@@ -790,9 +752,25 @@
     });
   }
 
+  /// Ask MetaMask to switch to the local Anvil chain (31337), adding it first
+  /// if MetaMask does not know it yet. The user approves both prompts.
+  async function switchToAnvil() {
+    const chainId = "0x7a69"; // 31337
+    try {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId }] });
+    } catch (e) {
+      const code = e.code === undefined && e.data ? e.data.originalError?.code : e.code;
+      if (code !== 4902) throw e; // 4902 = unknown chain: add it, which also switches
+      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+        chainId, chainName: "Anvil (local)", rpcUrls: ["http://127.0.0.1:8545"],
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }
+      }] });
+    }
+  }
+
   async function connect() {
-    // MetaMask injects window.ethereum - but NOT into file:// pages unless the
-    // extension is explicitly allowed to. Serve this over http instead.
+    // MetaMask provides window.ethereum - but not on file:// pages, so the
+    // page must be served over http (python -m http.server).
     if (!window.ethereum) {
       $("connLabel").textContent = "No wallet in this page, demo only";
       $("connectBtn").disabled = true;
@@ -800,13 +778,14 @@
     }
     await run("connectBtn", "Connecting…", async () => {
       const ethers = await loadEthers();
+      await switchToAnvil();
 
-      // BrowserProvider wraps the wallet; getSigner() triggers the account
-      // prompt and returns the thing that can sign and send.
+      // getSigner() opens the MetaMask account prompt.
       const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
 
-      const addr = prompt("Registry contract address on this chain:");
-      if (!addr) throw { shortMessage: "No address given, staying in demo." };
+      // From the header field; can be pre-filled with ?registry=0x... in the URL.
+      const addr = $("registryAddr").value.trim();
+      if (!addr) throw { shortMessage: "Enter the registry address first." };
 
       const contract = new ethers.Contract(addr.trim(), ABI, signer);
       state.backend = await chainBackend(contract, await signer.getAddress());
@@ -815,6 +794,7 @@
       $("dot").classList.add("live");
       $("connLabel").textContent = shortAddr(state.backend.account);
       $("connectBtn").remove();
+      $("registryAddr").remove();
 
       if (state.digest) state.record = await state.backend.lookup(state.digest);
       await refresh();
@@ -829,6 +809,7 @@
   $("pickBtn").addEventListener("click", () => $("file").click());
   $("file").addEventListener("change", (e) => e.target.files[0] && handleFile(e.target.files[0]));
   $("connectBtn").addEventListener("click", connect);
+  $("registryAddr").value = new URLSearchParams(location.search).get("registry") || "";
 
   ["dragenter", "dragover"].forEach((ev) =>
     bench.addEventListener(ev, (e) => { e.preventDefault(); bench.classList.add("over"); }));

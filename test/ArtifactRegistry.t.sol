@@ -4,27 +4,22 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ArtifactRegistry} from "../src/ArtifactRegistry.sol";
 
-/// @notice Tests for ArtifactRegistry.
+/// @notice Tests for ArtifactRegistry, written in Solidity and run by Foundry.
 ///
-/// @dev Foundry writes tests in Solidity, which is why signing can be exercised
-///      at all: `vm.sign` produces a real secp256k1 signature from a private
-///      key, so the EIP-712 path is tested end to end rather than mocked.
+/// @dev Foundry gives tests "cheatcodes" through `vm`:
+///        vm.addr(pk)          - the address that belongs to a private key
+///        vm.sign(pk, hash)    - sign a hash with a private key, like a wallet
+///        vm.prank(addr)       - the NEXT call is sent from `addr`
+///        vm.warp(ts)          - set the block timestamp
+///        vm.expectRevert(sel) - the NEXT call must fail with this error
+///        vm.assume(cond)      - in a fuzz test, skip inputs where cond is false
 ///
-///      The cheatcodes used below:
-///        vm.addr(pk)          - the address belonging to a private key
-///        vm.sign(pk, hash)    - sign a hash, returning (v, r, s)
-///        vm.prank(addr)       - make msg.sender be `addr` for the NEXT call
-///        vm.warp(ts)          - move block.timestamp
-///        vm.expectRevert(sel) - require that the NEXT call reverts with `sel`
-///        vm.assume(cond)      - in a fuzz test, discard inputs failing `cond`
-///
-///      "NEXT call" is literal for prank and expectRevert alike: it means the
-///      next external call of any kind, including a view call hidden inside an
-///      argument expression. Calls to `vm` itself do not count. That is why
-///      the helpers below never touch the registry - an earlier version read
-///      the typehash from the contract inside `_sign`, and every
-///      `vm.prank(relayer); registry.attest(a, _sign(...))` silently spent its
-///      prank on that read and ran attest as the owner instead.
+///      "NEXT call" means the next call to any contract - including a small
+///      read hidden inside an argument. Calls to `vm` itself do not count.
+///      That is why the helpers below never call the registry: an earlier
+///      version read a constant from the contract inside `_sign`, and
+///      `vm.prank(relayer); registry.attest(a, _sign(...))` used up the prank
+///      on that read, so attest was actually sent by the owner.
 contract ArtifactRegistryTest is Test {
     ArtifactRegistry registry;
 
@@ -32,27 +27,24 @@ contract ArtifactRegistryTest is Test {
     address stranger = address(0xB0B);
     address relayer = address(0xFEE);
 
-    // Reviewer keys. Any non-zero number below the curve order works as a
-    // private key; these are deliberately tiny so they are easy to read. The
-    // matching addresses come from vm.addr(pk) wherever one is needed.
+    // Reviewer private keys. Any small number works as a test key; the
+    // matching addresses come from vm.addr(pk).
     uint256 buildPk = 0xB01;
     uint256 qaPk = 0xB02;
     uint256 secPk = 0xB03;
 
-    // Stands in for the SHA-256 of a build. The contract never hashes anything
-    // itself - it stores whatever 32 bytes it is given - so keccak is fine here.
+    // Stands in for a file's SHA-256. The contract just stores 32 bytes.
     bytes32 constant DIGEST = keccak256("firmware-v1.2.3.bin");
 
-    // The EIP-712 strings a wallet works from, written out as literals rather
-    // than read back from the contract - see `_hash` for why that matters.
+    // The EIP-712 strings a wallet uses, written out here as literals rather
+    // than read from the contract - see `_hash` for why.
     string constant ATTESTATION_TYPE =
         "Attestation(bytes32 digest,bytes32 role,address signer,uint256 deadline)";
     bytes32 constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
     function setUp() public {
-        // The test contract itself deploys, so it is `owner` and every
-        // unpranked call below arrives as the owner.
+        // This test contract deploys the registry, so it is the owner.
         registry = new ArtifactRegistry(3);
         registry.setPublisher(vendor, true);
         registry.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), true);
@@ -70,7 +62,7 @@ contract ArtifactRegistryTest is Test {
         view
         returns (ArtifactRegistry.Attestation memory)
     {
-        // Fields in declaration order: digest, role, signer, deadline.
+        // Fields in order: digest, role, signer, deadline.
         return ArtifactRegistry.Attestation(DIGEST, role, vm.addr(pk), block.timestamp + 1 days);
     }
 
@@ -86,13 +78,10 @@ contract ArtifactRegistryTest is Test {
         );
     }
 
-    /// @dev Rebuilds the EIP-712 digest the way a wallet would: from the type
-    ///      string and domain LITERALS above, never from the contract under
-    ///      test. If this helper read `registry.ATTESTATION_TYPEHASH()` back,
-    ///      a typo in that constant would cancel itself out and every test
-    ///      would still pass while MetaMask produced signatures the contract
-    ///      rejects. Both sides computing the same hash from the same rules is
-    ///      the thing actually being tested.
+    /// @dev Compute the hash a wallet would sign, from our own literals - not
+    ///      from the contract. If we read the contract's constants back, a typo
+    ///      in them would go unnoticed: the test would sign with the same wrong
+    ///      value and pass, while real MetaMask signatures would be rejected.
     function _hash(ArtifactRegistry.Attestation memory a) internal view returns (bytes32) {
         bytes32 structHash = keccak256(abi.encode(keccak256(bytes(ATTESTATION_TYPE)), a));
         return keccak256(abi.encodePacked("\x19\x01", _domain(), structHash));
@@ -104,7 +93,7 @@ contract ArtifactRegistryTest is Test {
         returns (bytes memory)
     {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, _hash(a));
-        return abi.encodePacked(r, s, v); // the order wallets use
+        return abi.encodePacked(r, s, v); // the 65-byte order wallets use
     }
 
     function _attestAs(uint256 pk, bytes32 role) internal {
@@ -119,7 +108,7 @@ contract ArtifactRegistryTest is Test {
 
     // ------------------------------------------------------------ registry
 
-    /// @dev The two constants a wallet computes on its own, checked by name.
+    /// @dev The contract's constants must equal what a wallet computes.
     function test_contractConstantsMatchTheWalletSide() public view {
         assertEq(registry.ATTESTATION_TYPEHASH(), keccak256(bytes(ATTESTATION_TYPE)));
         assertEq(registry.domainSeparator(), _domain());
@@ -135,7 +124,7 @@ contract ArtifactRegistryTest is Test {
 
     function test_unknownDigestReadsAsEmpty() public view {
         (ArtifactRegistry.Artifact memory rec, bool released) = registry.verify(keccak256("nope"));
-        assertEq(rec.publisher, address(0)); // the sentinel for "never seen"
+        assertEq(rec.publisher, address(0)); // zero address = never registered
         assertFalse(released);
     }
 
@@ -162,11 +151,11 @@ contract ArtifactRegistryTest is Test {
         assertTrue(_released(DIGEST));
     }
 
-    /// @dev The signature decides who attested, not who paid for the gas.
+    /// @dev The signature says who signed; who sent the transaction is irrelevant.
     function test_relayerCannotForgeIdentity() public {
         _attestAs(qaPk, registry.ROLE_QA());
 
-        // Recorded against the signer, even though `relayer` sent the tx.
+        // Recorded under the signer, even though `relayer` sent it.
         assertEq(registry.signedBy(DIGEST, registry.ROLE_QA()), vm.addr(qaPk));
     }
 
@@ -179,13 +168,13 @@ contract ArtifactRegistryTest is Test {
     function test_signerWithoutRoleIsRejected() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_QA(), 0xDEAD);
 
-        // A perfectly valid signature from someone with no standing to give it.
+        // A valid signature from someone who does not hold the role.
         vm.expectRevert(ArtifactRegistry.RoleNotHeld.selector);
         registry.attest(a, _sign(0xDEAD, a));
     }
 
-    /// @dev Replay protection without a nonce: the (digest, role) slot is filled
-    ///      once and never cleared, so resubmitting the same bytes reverts.
+    /// @dev No nonce needed: each (digest, role) can be signed once, so
+    ///      sending the same signature twice fails.
     function test_sameSignatureCannotBeReplayed() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_BUILD(), buildPk);
         bytes memory sig = _sign(buildPk, a);
@@ -203,13 +192,11 @@ contract ArtifactRegistryTest is Test {
         registry.attest(a, _sign(qaPk, a));
     }
 
-    /// @dev A signature valid on one deployment must not work on another, even
-    ///      with identical contents. This is what `verifyingContract` in the
-    ///      EIP-712 domain buys, and it is the same mechanism that stops a
-    ///      testnet signature being replayed on mainnet.
+    /// @dev A signature for one deployment is useless on another, because the
+    ///      contract address is part of what gets signed (EIP-712 domain).
     function test_signatureDoesNotCarryToAnotherDeployment() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_QA(), qaPk);
-        bytes memory sig = _sign(qaPk, a); // bound to `registry` via _domain()
+        bytes memory sig = _sign(qaPk, a); // made for `registry`
 
         ArtifactRegistry twin = new ArtifactRegistry(3);
         twin.setRole(vm.addr(qaPk), twin.ROLE_QA(), true);
@@ -219,9 +206,9 @@ contract ArtifactRegistryTest is Test {
         twin.attest(a, sig);
     }
 
-    /// @dev Take a valid signature and flip it to its mirror image: s becomes
-    ///      (order - s) and v flips 27<->28. Raw `ecrecover` would accept this
-    ///      as a second valid signature from the same signer.
+    /// @dev Take a valid signature and turn it into its "mirror twin":
+    ///      s -> (order - s), v flipped 27<->28. It recovers to the same
+    ///      signer, and the contract must still reject it.
     function test_malleableSignatureIsRejected() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_BUILD(), buildPk);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(buildPk, _hash(a));
@@ -245,15 +232,14 @@ contract ArtifactRegistryTest is Test {
         sigs[1] = _sign(qaPk, list[1]);
         sigs[2] = _sign(secPk, list[2]);
 
-        // Three reviewers released a build in one transaction, none of them
-        // holding any ether. This is the whole design in four lines.
+        // Three reviewers, one transaction, sent by someone else.
         vm.prank(relayer);
         registry.attestBatch(list, sigs);
 
         assertTrue(_released(DIGEST));
     }
 
-    /// @dev Losing a role does not retract sign-offs already given.
+    /// @dev Losing a role does not undo signatures already given.
     function test_pastSignOffSurvivesLosingTheRole() public {
         _attestAs(buildPk, registry.ROLE_BUILD());
         registry.setRole(vm.addr(buildPk), registry.ROLE_BUILD(), false);
@@ -272,7 +258,7 @@ contract ArtifactRegistryTest is Test {
         vm.prank(vendor);
         registry.revoke(DIGEST, "bootloader watchdog fault");
 
-        assertFalse(_released(DIGEST)); // revocation dominates quorum
+        assertFalse(_released(DIGEST)); // revoked wins over quorum
     }
 
     function test_revokedBuildCannotCollectMoreSignOffs() public {
@@ -285,7 +271,7 @@ contract ArtifactRegistryTest is Test {
     }
 
     function test_onlyOriginalPublisherRevokes() public {
-        registry.setPublisher(stranger, true); // a publisher, just not this one
+        registry.setPublisher(stranger, true); // a publisher, but not this build's
         vm.prank(stranger);
         vm.expectRevert(ArtifactRegistry.NotTheOriginalPublisher.selector);
         registry.revoke(DIGEST, "not mine");
@@ -293,8 +279,7 @@ contract ArtifactRegistryTest is Test {
 
     // --------------------------------------------------------------- fuzz
 
-    /// @dev Foundry calls this 256 times with random bytes32 values. Fuzzing is
-    ///      cheap insurance against the case you did not think to write down.
+    /// @dev Foundry runs this 256 times with random digests.
     function testFuzz_anyDigestRoundTrips(bytes32 digest) public {
         vm.assume(digest != DIGEST);
 

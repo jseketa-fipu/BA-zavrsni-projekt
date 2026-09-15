@@ -255,7 +255,12 @@
     "error RoleAlreadySigned()",
     "error SignatureExpired()",
     "error BadSignature()",
-    "error MalleableSignature()",
+    "error ECDSAInvalidSignature()",
+    "error ECDSAInvalidSignatureLength(uint256 length)",
+    "error ECDSAInvalidSignatureS(bytes32 s)",
+    // Two more from OpenZeppelin, only possible at deployment (name/version too long).
+    "error InvalidShortString()",
+    "error StringTooLong(string str)",
     "error LengthMismatch()",
     "error QuorumOutOfRange()"
   ];
@@ -405,17 +410,16 @@
 
       // The revoke reason is only in the event log, not in storage (cheaper).
       if (rec.revoked) {
-        const logs = await contract.queryFilter(contract.filters.Revoked(digest));
+        const logs = await contract.queryFilter(contract.filters.Revoked(digest), START_BLOCK);
         if (logs.length) rec.reason = logs[logs.length - 1].args.reason;
       }
       return rec;
     }
 
     /// The contract keeps no list of builds; the table is rebuilt from the
-    /// `Registered` events. (Fine on a local chain. On a public network you
-    /// would fetch logs in block ranges, because providers limit the span.)
+    /// `Registered` events, starting at the deployment block (?from=).
     async function list() {
-      const logs = await contract.queryFilter(contract.filters.Registered());
+      const logs = await contract.queryFilter(contract.filters.Registered(), START_BLOCK);
       const digests = [...new Set(logs.map((l) => l.args.digest))];
       return (await Promise.all(digests.map(lookup))).filter(Boolean);
     }
@@ -632,7 +636,9 @@
       SignatureExpired: "This signature is past its deadline. Sign again.",
       ArtifactRevoked: "The build was withdrawn, so it can collect no more sign-offs.",
       BadSignature: "The signature does not match the named signer.",
-      MalleableSignature: "The signature was reshaped in transit and was rejected.",
+      ECDSAInvalidSignatureS: "The signature was reshaped in transit and was rejected.",
+      ECDSAInvalidSignature: "The signature is malformed.",
+      ECDSAInvalidSignatureLength: "The signature has the wrong length.",
       AlreadyRevoked: "That build has already been withdrawn.",
       UnknownDigest: "That digest is not in the registry."
     }[errorName(e)];
@@ -752,18 +758,31 @@
     });
   }
 
-  /// Ask MetaMask to switch to the local Anvil chain (31337), adding it first
-  /// if MetaMask does not know it yet. The user approves both prompts.
-  async function switchToAnvil() {
-    const chainId = "0x7a69"; // 31337
+  // Which chain the registry is on comes from the URL: ?chain=31337 (Anvil,
+  // the default) or ?chain=11155111 (Sepolia). ?from= is the block the
+  // contract was deployed in, so event queries do not start from block 0 -
+  // public RPCs refuse very large ranges.
+  const params = new URLSearchParams(location.search);
+  const CHAIN_ID = Number(params.get("chain")) || 31337;
+  const START_BLOCK = Number(params.get("from")) || 0;
+
+  // MetaMask knows Sepolia already; Anvil has to be described to it.
+  const CHAINS = {
+    31337: { chainName: "Anvil (local)", rpcUrls: ["http://127.0.0.1:8545"] },
+    11155111: { chainName: "Sepolia" }
+  };
+
+  /// Ask MetaMask to switch to CHAIN_ID, adding the network first if MetaMask
+  /// does not know it yet. The user approves the prompts.
+  async function switchChain() {
+    const chainId = "0x" + CHAIN_ID.toString(16);
     try {
       await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId }] });
     } catch (e) {
       const code = e.code === undefined && e.data ? e.data.originalError?.code : e.code;
-      if (code !== 4902) throw e; // 4902 = unknown chain: add it, which also switches
+      if (code !== 4902 || !CHAINS[CHAIN_ID]) throw e; // 4902 = unknown chain: add it
       await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
-        chainId, chainName: "Anvil (local)", rpcUrls: ["http://127.0.0.1:8545"],
-        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }
+        chainId, ...CHAINS[CHAIN_ID], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }
       }] });
     }
   }
@@ -778,7 +797,7 @@
     }
     await run("connectBtn", "Connecting…", async () => {
       const ethers = await loadEthers();
-      await switchToAnvil();
+      await switchChain();
 
       // getSigner() opens the MetaMask account prompt.
       const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
@@ -809,7 +828,7 @@
   $("pickBtn").addEventListener("click", () => $("file").click());
   $("file").addEventListener("change", (e) => e.target.files[0] && handleFile(e.target.files[0]));
   $("connectBtn").addEventListener("click", connect);
-  $("registryAddr").value = new URLSearchParams(location.search).get("registry") || "";
+  $("registryAddr").value = params.get("registry") || "";
 
   ["dragenter", "dragover"].forEach((ev) =>
     bench.addEventListener(ev, (e) => { e.preventDefault(); bench.classList.add("over"); }));

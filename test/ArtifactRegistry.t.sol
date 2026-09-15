@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ArtifactRegistry} from "../src/ArtifactRegistry.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @notice Tests for ArtifactRegistry, written in Solidity and run by Foundry.
 ///
@@ -208,7 +209,8 @@ contract ArtifactRegistryTest is Test {
 
     /// @dev Take a valid signature and turn it into its "mirror twin":
     ///      s -> (order - s), v flipped 27<->28. It recovers to the same
-    ///      signer, and the contract must still reject it.
+    ///      signer, and it must still be rejected - OpenZeppelin's ECDSA does
+    ///      that, with its own error (which carries `s`, hence expectPartialRevert).
     function test_malleableSignatureIsRejected() public {
         ArtifactRegistry.Attestation memory a = _attestation(registry.ROLE_BUILD(), buildPk);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(buildPk, _hash(a));
@@ -217,7 +219,7 @@ contract ArtifactRegistryTest is Test {
         bytes memory flipped =
             abi.encodePacked(r, bytes32(n - uint256(s)), v == 27 ? uint8(28) : uint8(27));
 
-        vm.expectRevert(ArtifactRegistry.MalleableSignature.selector);
+        vm.expectPartialRevert(ECDSA.ECDSAInvalidSignatureS.selector);
         registry.attest(a, flipped);
     }
 

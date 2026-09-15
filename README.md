@@ -10,6 +10,8 @@ a build with a free read.
 
 ```
 src/ArtifactRegistry.sol      the contract (the only thing deployed)
+script/Deploy.s.sol           deploys it and grants the roles
+lib/openzeppelin-contracts    OpenZeppelin v5.7 (EIP712, ECDSA)
 test/ArtifactRegistry.t.sol   19 Foundry tests
 web/index.html                the frontend, one file (demo mode + MetaMask)
 tools/verify-frontend.mjs     optional: checks the page's ABI against the contract
@@ -41,8 +43,8 @@ Optional: `forge build && npm install && node tools/verify-frontend.mjs`
 ## Design notes
 
 - **No nonce in the signed message** — each (build, role) can be signed once.
-- **Signature checks written by hand** (same as OpenZeppelin's), so every
-  line can be explained.
+- **OpenZeppelin `EIP712` + `ECDSA`** build the domain hash and recover the
+  signer; the role, quorum and replay rules are in the contract itself.
 - **Quorum is fixed at deployment** — it cannot be lowered later.
 - **Revoked wins** — a withdrawn build is never released.
 

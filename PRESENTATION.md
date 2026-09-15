@@ -93,11 +93,11 @@ screens from an in-memory ledger. Say so honestly.
 | Why SHA-256, not keccak? | It's built into the browser, and anyone can check it with `sha256sum`. |
 | Can the person submitting cheat? | No — the contract ignores who sent the transaction and only trusts the signatures. |
 | Why no nonce in the signed message? | Each (build, role) can be signed only once, so a signature cannot be replayed. |
-| Why not use OpenZeppelin for the signature check? | Same checks; written out so I can explain each line. Swapping in the library is two lines. |
+| What does OpenZeppelin do here? | `EIP712` builds the domain hash; `ECDSA.recover` checks the signature's length, rejects its mirror-twin form and the zero address, and returns the signer. Roles, quorum and replay rules are mine. |
 | Can a revoked build come back? | No. Fix it, and the new file gets a new digest. |
 | Gas cost? | ~64k for one signature, ~137k for a batch of three. |
 
 ## 8. Close
 
 "Reading is free, writing is rare, and no single party can approve a release
-alone. 144 lines of Solidity, 19 tests."
+alone. About 120 lines of Solidity on top of OpenZeppelin, 19 tests."

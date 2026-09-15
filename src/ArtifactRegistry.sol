@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+
 /// @title  ArtifactRegistry
 /// @notice A public record of software builds and who approved them.
 ///
@@ -18,7 +21,14 @@ pragma solidity ^0.8.24;
 ///         One person then sends all the signatures to the chain in a single
 ///         transaction. Checking a build is a free read. So writing is rare
 ///         and paid, reading is unlimited and free.
-contract ArtifactRegistry {
+///
+/// @dev Two OpenZeppelin pieces are used: `EIP712` computes the domain hash
+///      that ties signatures to this contract and this chain, and
+///      `ECDSA.recoverCalldata` turns a signature back into the signer's
+///      address (checking its length, rejecting the "mirror twin" form of a
+///      signature, and rejecting the zero address). Everything about roles,
+///      quorum, replay and revocation is in this file.
+contract ArtifactRegistry is EIP712 {
     // =====================================================================
     //                                TYPES
     // =====================================================================
@@ -53,22 +63,11 @@ contract ArtifactRegistry {
     bytes32 public constant ROLE_QA = keccak256("QA");
     bytes32 public constant ROLE_SECURITY = keccak256("SECURITY");
 
-    /// @dev EIP-712 is the standard for signing structured data so that the
-    ///      wallet can show the user readable fields instead of hex. These two
-    ///      constants describe the "shape" of what is signed. The strings must
-    ///      match what the frontend sends to MetaMask, character for character.
+    /// @dev EIP-712 describes the "shape" of the signed message with this
+    ///      hash. The string must match what the frontend sends to MetaMask,
+    ///      character for character.
     bytes32 public constant ATTESTATION_TYPEHASH =
         keccak256("Attestation(bytes32 digest,bytes32 role,address signer,uint256 deadline)");
-
-    bytes32 private constant DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-
-    /// @dev Every ECDSA signature has a "mirror twin" that is also valid for
-    ///      the same signer. We accept only the one with the smaller `s` value
-    ///      so each signature has exactly one valid form. This is the standard
-    ///      check; OpenZeppelin does the same.
-    uint256 private constant HALF_ORDER =
-        0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     // =====================================================================
     //                                STATE
@@ -83,9 +82,6 @@ contract ArtifactRegistry {
     /// @dev Fixed at deployment. If it could be lowered later, builds that
     ///      were half-approved would suddenly become "released".
     uint8 public immutable quorum;
-
-    uint256 private immutable _cachedChainId;
-    bytes32 private immutable _cachedDomainSeparator;
 
     /// @notice Who is allowed to register builds.
     mapping(address => bool) public isPublisher;
@@ -120,7 +116,9 @@ contract ArtifactRegistry {
     // =====================================================================
 
     /// @dev Named errors instead of `require("some text")`. They are cheaper,
-    ///      and the frontend turns the name into a readable message.
+    ///      and the frontend turns the name into a readable message. Malformed
+    ///      signatures revert with OpenZeppelin's own `ECDSAInvalidSignature*`
+    ///      errors; `BadSignature` means "valid, but not from the claimed signer".
     error NotOwner();
     error NotPublisher();
     error AlreadyRegistered();
@@ -132,7 +130,6 @@ contract ArtifactRegistry {
     error RoleAlreadySigned();
     error SignatureExpired();
     error BadSignature();
-    error MalleableSignature();
     error LengthMismatch();
     error QuorumOutOfRange();
 
@@ -142,19 +139,17 @@ contract ArtifactRegistry {
     }
 
     /// @param quorum_ How many roles must sign (1 to 3).
-    /// @dev Weak point to be aware of: the owner is one address that hands out
-    ///      all the roles, so the whole thing is only as safe as that key.
-    ///      In production the owner would be a multisig wallet.
-    constructor(uint8 quorum_) {
+    /// @dev `EIP712("ArtifactRegistry", "1")` sets the name and version that go
+    ///      into every signature's domain; the frontend uses the same two
+    ///      strings. Weak point to be aware of: the owner is one address that
+    ///      hands out all the roles, so the whole thing is only as safe as that
+    ///      key. In production the owner would be a multisig wallet.
+    constructor(uint8 quorum_) EIP712("ArtifactRegistry", "1") {
         if (quorum_ == 0 || quorum_ > 3) revert QuorumOutOfRange();
 
         owner = msg.sender;
         quorum = quorum_;
         isPublisher[msg.sender] = true;
-
-        // Pre-compute the EIP-712 domain hash once; see domainSeparator().
-        _cachedChainId = block.chainid;
-        _cachedDomainSeparator = _buildDomainSeparator();
 
         emit PublisherSet(msg.sender, true);
     }
@@ -232,8 +227,8 @@ contract ArtifactRegistry {
         if (signedBy[a.digest][a.role] != address(0)) revert RoleAlreadySigned();
 
         // Recover the address that made the signature; it must be the one
-        // the message claims.
-        if (_recover(_hashToSign(a), signature) != a.signer) revert BadSignature();
+        // the message claims. (OpenZeppelin reverts here on a malformed one.)
+        if (ECDSA.recoverCalldata(_hashToSign(a), signature) != a.signer) revert BadSignature();
 
         signedBy[a.digest][a.role] = a.signer;
 
@@ -275,60 +270,22 @@ contract ArtifactRegistry {
 
     /// @notice The EIP-712 "domain": identifies this exact contract on this
     ///         exact chain, so a signature made for it is useless anywhere else.
-    /// @dev Normally the cached value. If the chain ID has changed (a fork),
-    ///      it is recomputed so old signatures do not carry over.
+    /// @dev OpenZeppelin caches it at deployment and recomputes it if the chain
+    ///      ID ever changes (a fork), so old signatures do not carry over.
     function domainSeparator() public view returns (bytes32) {
-        return block.chainid == _cachedChainId ? _cachedDomainSeparator : _buildDomainSeparator();
+        return _domainSeparatorV4();
     }
 
     // =====================================================================
     //                              INTERNALS
     // =====================================================================
 
-    function _buildDomainSeparator() private view returns (bytes32) {
-        // name + version identify the app; chainId + address(this) pin the
-        // signature to this chain and this deployment.
-        return keccak256(
-            abi.encode(
-                DOMAIN_TYPEHASH,
-                keccak256(bytes("ArtifactRegistry")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(this)
-            )
-        );
-    }
-
-    /// @dev Build the 32-byte hash that the wallet actually signed. Must be
-    ///      computed exactly the way EIP-712 says, or the recovered signer will
-    ///      be wrong:  keccak256( 0x19 0x01 ‖ domain ‖ hash of the struct ).
-    ///      The 0x19 0x01 prefix makes sure this can never be mistaken for a
+    /// @dev The 32-byte hash the wallet actually signed:
+    ///      keccak256( 0x19 0x01 ‖ domain ‖ hash of the struct ).
+    ///      `_hashTypedDataV4` (OpenZeppelin) adds the prefix and the domain;
+    ///      the 0x19 0x01 prefix makes sure this can never be mistaken for a
     ///      real transaction.
     function _hashToSign(Attestation calldata a) private view returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(ATTESTATION_TYPEHASH, a));
-        return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
-    }
-
-    /// @dev Turn (hash, signature) back into the signer's address.
-    ///      A signature is 65 bytes: r (32) + s (32) + v (1). `ecrecover` is a
-    ///      built-in that does the math. We add the checks it does not do
-    ///      itself; OpenZeppelin's ECDSA library does the same three.
-    function _recover(bytes32 hash, bytes calldata sig) private pure returns (address) {
-        if (sig.length != 65) revert BadSignature();
-
-        // Split the 65 bytes into the three parts.
-        (bytes32 r, bytes32 s) = abi.decode(sig[:64], (bytes32, bytes32));
-        uint8 v = uint8(sig[64]);
-
-        // Reject the "mirror twin" form (see HALF_ORDER).
-        if (uint256(s) > HALF_ORDER) revert MalleableSignature(); // the mirror signature
-
-        // On garbage input ecrecover does not fail - it returns the zero
-        // address. Without this check, a role accidentally granted to the zero
-        // address would accept any random bytes as a signature.
-        address recovered = ecrecover(hash, v, r, s);
-        if (recovered == address(0)) revert BadSignature();
-
-        return recovered;
+        return _hashTypedDataV4(keccak256(abi.encode(ATTESTATION_TYPEHASH, a)));
     }
 }
